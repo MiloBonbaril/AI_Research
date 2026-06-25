@@ -1,0 +1,12 @@
+{
+  "model": "GPT-2 Small",
+  "steps": 87,
+  "tokens_seen": 2850816,
+  "wall_time": 120.6293571139995,
+  "final_train_loss": 8.065615508556366,
+  "val_loss": 6.747132070602909,
+  "val_perplexity": 851.6128912637516,
+  "loss_history": [
+    8.065615508556366
+  ]
+}
