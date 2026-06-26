@@ -196,12 +196,12 @@ class GatedLinearAttention(nn.Module):
     """
 
     def __init__(self, c: MemoraConfig, chunk: int = 16):
-        # chunk=16 : la voie chunkée rescale les clés par exp(-Gc), qui déborde (→NaN)
-        # quand la décroissance cumulée sur un chunk est forte. Le pire exposant vaut
-        # ~chunk × |log(décroissance)| ; chunk=16 reste stable jusqu'à une rétention ~0.01
-        # (à chunk=64, une rétention apprise de 0.1 suffit à faire NaN).
-        # ponytail: chunk fixe à un niveau. Pour throughput max sans ce plafond,
-        # passer à fla (kernel Triton à sous-chunks). Cf. _chunked.
+        # _chunked est désormais inconditionnellement stable (intra-chunk via la
+        # différence Gc_i-Gc_j bornée ≤0, jamais e^{-Gc} absolu). Le plafond du chunk
+        # n'est donc plus l'overflow mais la MÉMOIRE : l'intra matérialise un tenseur
+        # (C,C,d) par chunk (décroissance par canal). chunk=16 = bon compromis ; on peut
+        # monter (32/64) pour le débit si la VRAM suit.
+        # ponytail: pour throughput max sans le tenseur (C,C,d), passer à fla (Triton).
         super().__init__()
         self.n_head = c.n_head
         self.hd = c.head_dim
@@ -234,9 +234,10 @@ class GatedLinearAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         a_logit = self.a_high(self.a_low(x)) + self.a_bias
-        # log(décroissance) directement via logsigmoid : numériquement stable même
-        # si a_logit << 0 (log(sigmoid(x)) naïf donnerait log(0) = -inf → NaN dans cumsum).
-        g = F.logsigmoid(a_logit).view(*shp).transpose(1, 2)    # ≤ 0
+        # log(décroissance) via logsigmoid (stable même si a_logit << 0, vs log(sigmoid)).
+        # clamp(min=-10) : plancher de rétention e^-10≈4.5e-5/pas (rien d'utile en-dessous),
+        # ceinture+bretelles qui borne aussi la forme naïve. ≤ 0 garanti.
+        g = F.logsigmoid(a_logit).clamp(min=-10.0).view(*shp).transpose(1, 2)
         return q, k, v, g
 
     def forward(self, x: torch.Tensor, cos=None, sin=None) -> torch.Tensor:
@@ -263,32 +264,37 @@ class GatedLinearAttention(nn.Module):
         q = q.view(B, H, nC, C, d); k = k.view(B, H, nC, C, d)
         v = v.view(B, H, nC, C, d); g = g.view(B, H, nC, C, d)
 
-        Gc = g.cumsum(dim=3)                       # (B,H,nC,C,d) cumul inclusif intra-chunk
-        q_s = q * Gc.exp()                         # query mis à l'échelle
-        k_s = k * (-Gc).exp()                      # key inverse-échelle
+        Gc = g.cumsum(dim=3)                       # (B,H,nC,C,d) cumul inclusif, ≤0, décroissant
+        q_s = q * Gc.exp()                         # query ⊙ e^Gc — BORNÉ (Gc≤0 → e^Gc≤1)
 
-        # intra-chunk : A_{tj} = (q⊙e^Gc)·(k⊙e^-Gc), masqué t>=j
-        A = torch.einsum("bhcid,bhcjd->bhcij", q_s, k_s)
-        causal = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool))
-        A = A.masked_fill(~causal, 0.0)
-        o_intra = torch.einsum("bhcij,bhcjd->bhcid", A, v)
-
-        # inter-chunk : porter l'état d'un chunk au suivant
+        # inter-chunk : porter l'état d'un chunk au suivant (déjà stable : last-Gc ≤ 0)
         last = Gc[:, :, :, -1, :]                  # (B,H,nC,d) cumul total du chunk
-        kbar = k * (last.unsqueeze(3) - Gc).exp()  # k_j ⊙ e^(Gc_last - Gc_j)
-        # contribution de chaque chunk à l'état: kbar^T @ v  → (B,H,nC,d,d)
-        S_chunk = torch.einsum("bhcjd,bhcje->bhcde", kbar, v)
+        kbar = k * (last.unsqueeze(3) - Gc).exp()  # k_j ⊙ e^(Gc_last - Gc_j), exposant ≤ 0
+        S_chunk = torch.einsum("bhcjd,bhcje->bhcde", kbar, v)   # (B,H,nC,d,d)
         decay_chunk = last.exp()                   # (B,H,nC,d) décroissance globale du chunk
 
+        causal = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool))
+
         # scan séquentiel sur les chunks (boucle courte: Tp/C itérations)
-        o_inter = torch.empty_like(o_intra)
+        o = torch.empty(B, H, nC, C, d, device=q.device, dtype=q.dtype)
         S = torch.zeros(B, H, d, d, device=q.device, dtype=q.dtype)
         for c in range(nC):
-            o_inter[:, :, c] = torch.einsum("bhid,bhde->bhie", q_s[:, :, c], S)
+            Gc_c = Gc[:, :, c]                     # (B,H,C,d)
+            # intra-chunk STABLE : on n'écrit jamais e^{-Gc} en absolu (qui overflow),
+            # mais la différence Gc_i - Gc_j directement. Comme Gc décroît et qu'on masque
+            # i≥j, l'exposant est ≤ 0 → e^(…) ∈ (0,1], jamais d'overflow quelle que soit
+            # la force du gate. Décroissance par canal → tenseur (C,C,d) transitoire (libéré
+            # à chaque itération ; c'est lui qui borne la taille de chunk, plus l'overflow).
+            diff = Gc_c.unsqueeze(3) - Gc_c.unsqueeze(2)        # (B,H,C,C,d) = Gc_i - Gc_j
+            D = diff.clamp(max=0.0).exp().masked_fill(~causal[:, :, None], 0.0)
+            A = torch.einsum("bhid,bhjd,bhijd->bhij", q[:, :, c], k[:, :, c], D)
+            o_intra = torch.einsum("bhij,bhjd->bhid", A, v[:, :, c])
+            # inter-chunk : contribution de l'état porté (q_s borné)
+            o_inter = torch.einsum("bhid,bhde->bhie", q_s[:, :, c], S)
+            o[:, :, c] = o_intra + o_inter
             S = decay_chunk[:, :, c].unsqueeze(-1) * S + S_chunk[:, :, c]
 
-        o = (o_intra + o_inter).view(B, H, Tp, d)
-        return o[:, :, :T].to(v.dtype if False else q.dtype)
+        return o.view(B, H, Tp, d)[:, :, :T].to(q.dtype)
 
     @torch.no_grad()
     def _recurrent(self, q, k, v, g):
@@ -429,6 +435,13 @@ if __name__ == "__main__":
     err = (o_chunk - o_rec).abs().max().item()
     assert err < 1e-4, f"GLA chunké != récurrent (err={err})"
     print(f"GLA chunké == récurrent (err max = {err:.2e})")
+
+    # 1b. stabilité inconditionnelle : gate poussé à décroissance ~0 (overflow naïf) → fini
+    gla_x = GatedLinearAttention(cfg, chunk=64)
+    with torch.no_grad():
+        gla_x.a_bias.fill_(-60.0)
+    assert torch.isfinite(gla_x(torch.randn(2, 80, cfg.n_embd))).all(), "overflow GLA"
+    print("GLA stable même à décroissance ~0 (chunk=64)")
 
     # 2. forward + shapes + sliding window (T > window) + z-loss
     cfg2 = MemoraConfig(vocab_size=512, n_embd=128, n_head=4, n_kv_heads=2, head_dim=32,
