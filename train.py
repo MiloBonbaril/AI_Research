@@ -115,6 +115,7 @@ def train_model(
     device: str,
     log_interval: int = 50,
     max_steps: int | None = None,
+    wandb_run=None,
 ) -> TrainResult:
     """
     Entraîne un modèle, soit pendant `duration_seconds` secondes, soit pendant
@@ -207,7 +208,17 @@ def train_model(
         tokens_seen += batch_tokens
         running_loss += accum_loss
 
-        # -- Log ---
+        # -- Log wandb (chaque step → courbes lisses) ---
+        if wandb_run is not None:
+            elapsed = time.monotonic() - start_time
+            wandb_run.log({
+                "train/loss": accum_loss,
+                "train/lr": current_lr,
+                "train/tokens_seen": tokens_seen,
+                "train/tok_per_sec": tokens_seen / elapsed,
+            }, step=step)
+
+        # -- Log console ---
         if step % log_interval == 0:
             avg_loss = running_loss / log_interval
             loss_history.append(avg_loss)
@@ -232,6 +243,16 @@ def train_model(
     print(f"\n  [{model_name}] Terminé — {step} steps en {wall_time:.1f}s")
     print(f"  [{model_name}] Val loss: {val_loss:.4f} | Val perplexity: {val_ppl:.2f}\n")
 
+    if wandb_run is not None:
+        wandb_run.log({"val/loss": val_loss, "val/perplexity": val_ppl}, step=step)
+        wandb_run.summary.update({
+            "val/loss": val_loss,
+            "val/perplexity": val_ppl,
+            "wall_time": wall_time,
+            "tokens_seen": tokens_seen,
+            "steps": step,
+        })
+
     return TrainResult(
         model_name=model_name,
         steps=step,
@@ -241,6 +262,29 @@ def train_model(
         val_loss=val_loss,
         val_perplexity=val_ppl,
         loss_history=loss_history,
+    )
+
+
+def init_wandb(project: str, model_name: str, model: LanguageModel, args, device: str, group: str):
+    """Démarre un run wandb par modèle, groupés → courbes superposées dans le projet."""
+    import wandb
+    return wandb.init(
+        project=project,
+        name=model_name,
+        group=group,
+        reinit=True,
+        config={
+            "model": model_name,
+            "params_M": round(model.num_params() / 1e6, 1),
+            "batch_size": args.batch_size,
+            "grad_accum": args.grad_accum,
+            "effective_batch": args.batch_size * args.grad_accum,
+            "lr": args.lr,
+            "context_len": args.context_len,
+            "max_steps": args.max_steps,
+            "duration": None if args.max_steps is not None else args.duration,
+            "device": device,
+        },
     )
 
 
@@ -310,8 +354,11 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate max")
     parser.add_argument("--context-len", type=int, default=1024, help="Longueur de contexte")
     parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--log-interval", type=int, default=50, help="Fréquence de log en steps")
+    parser.add_argument("--log-interval", type=int, default=50, help="Fréquence de log console en steps")
+    parser.add_argument("--no-wandb", action="store_true", help="Désactiver le logging Weights & Biases")
+    parser.add_argument("--wandb-project", type=str, default="memora-vs-gpt2", help="Nom du projet wandb")
     args = parser.parse_args()
+    use_wandb = not args.no_wandb
 
     if args.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -348,23 +395,33 @@ def main():
     # -- Entraînement séquentiel : même budget (temps OU steps) ------------
     # --max-steps override --duration s'il est fourni.
     duration = None if args.max_steps is not None else args.duration
+    timestamp = time.strftime("%Y%m%d_%H%M%S")  # sert de group wandb ET de préfixe fichiers
+
+    run_a = init_wandb(args.wandb_project, model_a_name, model_a, args, device, timestamp) if use_wandb else None
     result_a = train_model(
         model_a, model_a_name, train_loader, val_loader,
         duration_seconds=duration, lr=args.lr,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
+        wandb_run=run_a,
     )
+    if run_a is not None:
+        run_a.finish()
 
     # Libérer la VRAM du premier modèle
     model_a.cpu()
     torch.cuda.empty_cache() if device == "cuda" else None
 
+    run_b = init_wandb(args.wandb_project, model_b_name, model_b, args, device, timestamp) if use_wandb else None
     result_b = train_model(
         model_b, model_b_name, train_loader, val_loader,
         duration_seconds=duration, lr=args.lr,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
+        wandb_run=run_b,
     )
+    if run_b is not None:
+        run_b.finish()
 
     # -- Résumé ---
     print_comparison(result_a, result_b)
@@ -372,7 +429,6 @@ def main():
     # -- Sauvegarde des résultats ---
     results_path = Path("results")
     results_path.mkdir(exist_ok=True)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
     for r in (result_a, result_b):
         out = {
             "model": r.model_name,
