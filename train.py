@@ -362,10 +362,11 @@ def main():
     parser = argparse.ArgumentParser(description="Entraînement comparatif de deux modèles")
     parser.add_argument("--duration", type=int, default=300, help="Durée par modèle en secondes (défaut: 300 = 5min)")
     parser.add_argument("--max-steps", type=int, default=None, help="Entraîner sur N steps au lieu d'une durée (override --duration)")
-    parser.add_argument("--batch-size", type=int, default=8, help="Micro-batch size")
-    parser.add_argument("--grad-accum", type=int, default=4, help="Steps d'accumulation de gradient (batch effectif = batch_size × grad_accum)")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate max")
-    parser.add_argument("--context-len", type=int, default=1024, help="Longueur de contexte")
+    parser.add_argument("--batch-size", type=int, default=2, help="Micro-batch size (2 → tient à context 2048 sur ~12 Go ; monter si VRAM dispo)")
+    parser.add_argument("--grad-accum", type=int, default=16, help="Steps d'accumulation de gradient (batch effectif = batch_size × grad_accum = 32)")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate max (GPT-2 ; défaut Memora si --lr-memora absent)")
+    parser.add_argument("--lr-memora", type=float, default=6e-4, help="Learning rate Memora (arch moderne → souvent plus haut que GPT-2). Axe 11.")
+    parser.add_argument("--context-len", type=int, default=2048, help="Longueur de contexte (axe 9 : 2048 → GPT-2 paie son O(T²))")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--log-interval", type=int, default=50, help="Fréquence de log console en steps")
     parser.add_argument("--no-wandb", action="store_true", help="Désactiver le logging Weights & Biases")
@@ -416,7 +417,7 @@ def main():
     run_a = init_wandb(args.wandb_project, model_a_name, model_a, args, device, timestamp) if use_wandb else None
     result_a = train_model(
         model_a, model_a_name, train_loader, val_loader,
-        duration_seconds=duration, lr=args.lr,
+        duration_seconds=duration, lr=args.lr_memora,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
         wandb_run=run_a, use_compile=not args.no_compile,

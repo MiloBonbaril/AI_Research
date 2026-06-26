@@ -63,13 +63,18 @@ class MemoraConfig(BaseModelConfig):
 
     # --- GQA / dimensions attention ---
     n_kv_heads: int = 3            # têtes key/value (GQA) → cache KV /4
-    head_dim: int = 64            # n_embd // n_head
-    d_ff: int = 1920              # taille interne SwiGLU (2.5×). 1920 plutôt que 2048
-                                  # car la couche GLA (5 proj. pleines + gate low-rank)
-                                  # coûte plus qu'une couche d'attention → ramène à ~126M.
+    head_dim: int = 64            # n_embd // n_head (couches d'attention)
+    d_ff: int = 2000              # taille interne SwiGLU (~2.6×). Remonté de 1920 → 2000
+                                  # (axe 10) avec les params libérés par gla_head_dim réduit ;
+                                  # reste ~126M (budget GPT-2). 4× plein (3072) coûterait +37M,
+                                  # hors budget.
 
     # --- hybridation ---
     recurrent_layers: tuple = (3, 7, 10, 13)   # indices des couches GLA
+    global_layers: tuple = (5, 11)             # indices des couches d'attention GLOBALE (softmax
+                                               # dense causale) — rétablissent le long-range que la
+                                               # fenêtre 512 ampute (axe 8). Free en params (mêmes
+                                               # projections qu'une couche locale). Le reste = local.
     sliding_window: int = 512
 
     # --- position ---
@@ -83,6 +88,11 @@ class MemoraConfig(BaseModelConfig):
 
     # --- GLA ---
     gla_low_rank: int = 16
+    gla_head_dim: int = 48            # head_dim PROPRE aux couches GLA (< head_dim attention=64).
+                                      # Réduit le coût des 5 projections GLA → finance d_ff (axe 10).
+                                      # fla impose q/k/v/g de même forme → on garde n_head têtes.
+    gla_use_rope: bool = False        # signal positionnel RoPE sur GLA (axe 11). Off par défaut :
+                                      # la position vit dans l'état ; à activer comme expérience.
     gla_decay_init_bias: float = 3.0  # biais d'init du gate → décroissance ~sigmoid(3)=0.95 (knob de calibration)
 
     tie_embeddings: bool = True
@@ -154,14 +164,19 @@ class SwiGLU(nn.Module):
 # ---------------------------------------------------------------------------
 
 class LocalAttention(nn.Module):
-    """Attention causale à fenêtre glissante + GQA + RoPE + QK-Norm."""
+    """Attention causale + GQA + RoPE + QK-Norm.
 
-    def __init__(self, c: MemoraConfig):
+    window = int  → fenêtre glissante (couche locale, O(T·W)).
+    window = None → causale pleine (couche GLOBALE, O(T²) mais flash → coût modéré).
+    Projections identiques dans les deux cas → une couche globale est gratuite en params.
+    """
+
+    def __init__(self, c: MemoraConfig, window: int | None):
         super().__init__()
         self.n_head = c.n_head
         self.n_kv = c.n_kv_heads
         self.hd = c.head_dim
-        self.window = c.sliding_window
+        self.window = window
         assert self.n_head % self.n_kv == 0, "n_head doit être multiple de n_kv_heads"
 
         self.q_proj = nn.Linear(c.n_embd, self.n_head * self.hd, bias=c.bias)
@@ -175,7 +190,7 @@ class LocalAttention(nn.Module):
             self.k_norm = RMSNorm(self.hd, c.norm_eps)
 
     def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
-                block_mask) -> torch.Tensor:
+                block_masks: dict) -> torch.Tensor:
         B, T, _ = x.shape
         q = self.q_proj(x).view(B, T, self.n_head, self.hd).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_kv, self.hd).transpose(1, 2)
@@ -190,16 +205,15 @@ class LocalAttention(nn.Module):
         k = apply_rope(k, cos, sin)
 
         if x.is_cuda:
-            # flex_attention : fenêtre glissante via block_mask (construit/caché une fois par
-            # Memora, cf. _sliding_block_mask) + GQA native (enable_gqa). Kernel fusé sous
-            # torch.compile → plus de masque dense (T,T) ni de repeat_interleave K,V.
-            y = _flex_attention(q, k, v, block_mask=block_mask, enable_gqa=True)
+            # flex_attention : block_mask (local fenêtré OU global causal) caché par Memora,
+            # + GQA native (enable_gqa). Kernel fusé sous torch.compile.
+            y = _flex_attention(q, k, v, block_mask=block_masks[self.window], enable_gqa=True)
         else:
             # repli CPU (self-test) : flex_attention ne supporte pas le backward sur CPU.
-            # SDPA + enable_gqa garde la GQA native ; masque additif fenêtré sur CPU = OK.
+            # SDPA + enable_gqa garde la GQA native. window=None → causal pleine.
             i = torch.arange(T, device=x.device)[:, None]
             j = torch.arange(T, device=x.device)[None, :]
-            allowed = (i >= j) & (i - j < self.window)
+            allowed = (i >= j) if self.window is None else (i >= j) & (i - j < self.window)
             attn_mask = torch.where(allowed, 0.0, float("-inf")).to(q.dtype)
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, enable_gqa=True)
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.hd)
@@ -223,7 +237,9 @@ class GatedLinearAttention(nn.Module):
         # ponytail: pour throughput max sans le tenseur (C,C,d), passer à fla (Triton).
         super().__init__()
         self.n_head = c.n_head
-        self.hd = c.head_dim
+        self.hd = c.gla_head_dim       # head_dim propre à GLA (≤ head_dim attention) — axe 10
+        self.use_rope = c.gla_use_rope
+        self.rope_theta = c.rope_theta
         self.chunk = chunk
         dim = self.n_head * self.hd
 
@@ -259,9 +275,13 @@ class GatedLinearAttention(nn.Module):
         g = F.logsigmoid(a_logit).clamp(min=-10.0).view(*shp).transpose(1, 2)
         return q, k, v, g
 
-    def forward(self, x: torch.Tensor, cos=None, sin=None, block_mask=None) -> torch.Tensor:
-        # cos/sin/block_mask ignorés : pas de RoPE ni de masque sur GLA (position dans l'état).
+    def forward(self, x: torch.Tensor, cos=None, sin=None, block_masks=None) -> torch.Tensor:
+        # block_masks ignoré : pas de masque sur GLA. cos/sin (taille head_dim attention)
+        # ignorés aussi : si gla_use_rope, on construit un RoPE à la dimension gla_head_dim.
         q, k, v, g = self._proj(x)            # (B,H,T,d)
+        if self.use_rope:                     # signal positionnel optionnel (axe 11)
+            rc, rs = build_rope_cache(x.shape[1], self.hd, self.rope_theta, x.device, q.dtype)
+            q, k = apply_rope(q, rc, rs), apply_rope(k, rc, rs)
         if _fla_chunk_gla is not None and x.is_cuda:
             # Kernel Triton fusé : layout (B,T,H,d) ; scale=1.0 car q n'est pas pré-scalé
             # (notre _chunked/_recurrent non plus). Équivalent à _chunked à la précision
@@ -350,17 +370,23 @@ class GatedLinearAttention(nn.Module):
 # ---------------------------------------------------------------------------
 
 class Block(nn.Module):
-    def __init__(self, c: MemoraConfig, recurrent: bool):
+    def __init__(self, c: MemoraConfig, kind: str):
         super().__init__()
-        self.recurrent = recurrent
+        assert kind in ("gla", "local", "global")
+        self.recurrent = kind == "gla"
         self.norm_1 = RMSNorm(c.n_embd, c.norm_eps)
-        self.mixer = GatedLinearAttention(c) if recurrent else LocalAttention(c)
+        if kind == "gla":
+            self.mixer = GatedLinearAttention(c)
+        elif kind == "global":
+            self.mixer = LocalAttention(c, window=None)        # causal pleine
+        else:
+            self.mixer = LocalAttention(c, window=c.sliding_window)
         self.norm_2 = RMSNorm(c.n_embd, c.norm_eps)
         self.mlp = SwiGLU(c)
 
     def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
-                block_mask) -> torch.Tensor:
-        x = x + self.mixer(self.norm_1(x), cos, sin, block_mask)
+                block_masks: dict) -> torch.Tensor:
+        x = x + self.mixer(self.norm_1(x), cos, sin, block_masks)
         x = x + self.mlp(self.norm_2(x))
         return x
 
@@ -379,11 +405,16 @@ class Memora(LanguageModel):
         assert c.n_embd == c.n_head * c.head_dim, "n_embd doit == n_head * head_dim"
 
         self.tok_embd = nn.Embedding(c.vocab_size, c.n_embd)
-        rec = set(c.recurrent_layers)
-        self.blocks = nn.ModuleList([Block(c, i in rec) for i in range(c.n_layer)])
+        rec, glob = set(c.recurrent_layers), set(c.global_layers)
+        assert not (rec & glob), "une couche ne peut être à la fois GLA et globale"
+        def kind(i): return "gla" if i in rec else "global" if i in glob else "local"
+        self.blocks = nn.ModuleList([Block(c, kind(i)) for i in range(c.n_layer)])
+        # fenêtres distinctes parmi les couches d'attention (None=globale, int=locale) →
+        # un block_mask par fenêtre, caché par (T, device).
+        self.attn_windows = {b.mixer.window for b in self.blocks if not b.recurrent}
         self.norm_f = RMSNorm(c.n_embd, c.norm_eps)
         self.lm_head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
-        self._bm_cache: dict = {}   # block_masks flex_attention, cachés par (T, device)
+        self._bm_cache: dict = {}   # {(T,device): {window: BlockMask}}
 
         # Cache RoPE (cos/sin) calculé une fois, partagé par toutes les couches locales.
         # Buffers non-persistants (recalculables) → suivent .to(device), absents du state_dict.
@@ -401,7 +432,7 @@ class Memora(LanguageModel):
                 nn.init.normal_(p, mean=0.0, std=scale)
 
         print(f"Memora initialisé — {self.num_params()/1e6:.1f}M paramètres "
-              f"({c.n_layer} couches, GLA={c.recurrent_layers})")
+              f"({c.n_layer} couches, GLA={c.recurrent_layers}, globales={c.global_layers})")
 
     @staticmethod
     def _init_weights(module: nn.Module):
@@ -420,32 +451,35 @@ class Memora(LanguageModel):
             self.rope_cos, self.rope_sin = cos, sin
         return self.rope_cos[:T].to(dtype), self.rope_sin[:T].to(dtype)
 
-    def _sliding_block_mask(self, T: int, device):
-        """BlockMask flex_attention (causal ∩ fenêtre glissante), construit une fois par
-        (T, device) puis caché — remplace le masque dense reconstruit à chaque couche."""
+    def _block_masks(self, T: int, device):
+        """{window: BlockMask} flex_attention, un par fenêtre distincte (None=causal pleine,
+        int=fenêtre glissante), construit une fois par (T, device) puis caché."""
         key = (T, str(device))
-        bm = self._bm_cache.get(key)
-        if bm is None:
-            W = self.config.sliding_window
-            def mask_mod(b, h, qi, ki):
-                return (qi >= ki) & (qi - ki < W)
-            bm = create_block_mask(mask_mod, B=None, H=None, Q_LEN=T, KV_LEN=T, device=device)
-            self._bm_cache[key] = bm
-        return bm
+        masks = self._bm_cache.get(key)
+        if masks is None:
+            masks = {}
+            for w in self.attn_windows:
+                if w is None:
+                    def mod(b, h, qi, ki): return qi >= ki                  # globale : causal
+                else:
+                    def mod(b, h, qi, ki, _w=w): return (qi >= ki) & (qi - ki < _w)
+                masks[w] = create_block_mask(mod, B=None, H=None, Q_LEN=T, KV_LEN=T, device=device)
+            self._bm_cache[key] = masks
+        return masks
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         B, T = idx.shape
         x = self.tok_embd(idx)
         cos, sin = self._rope(T, x.device, x.dtype)
-        block_mask = self._sliding_block_mask(T, x.device)
+        block_masks = self._block_masks(T, x.device)
         ckpt = self.config.grad_checkpoint and self.training
         for block in self.blocks:
             if ckpt and block.recurrent:
                 # recompute des couches GLA au backward → moins d'activations stockées
-                x = torch.utils.checkpoint.checkpoint(block, x, cos, sin, block_mask,
+                x = torch.utils.checkpoint.checkpoint(block, x, cos, sin, block_masks,
                                                       use_reentrant=False)
             else:
-                x = block(x, cos, sin, block_mask)
+                x = block(x, cos, sin, block_masks)
         x = self.norm_f(x)
         logits = self.lm_head(x)
         if self.config.logit_cap is not None:
@@ -497,10 +531,10 @@ if __name__ == "__main__":
     assert torch.isfinite(gla_x(torch.randn(2, 80, cfg.n_embd))).all(), "overflow GLA"
     print("GLA stable même à décroissance ~0 (chunk=64)")
 
-    # 2. forward + shapes + sliding window (T > window) + z-loss
+    # 2. forward + shapes + sliding window (T > window) + couche globale + RoPE-GLA + z-loss
     cfg2 = MemoraConfig(vocab_size=512, n_embd=128, n_head=4, n_kv_heads=2, head_dim=32,
-                         n_layer=4, d_ff=256, recurrent_layers=(1, 3),
-                         sliding_window=8, context_len=256)
+                         n_layer=4, d_ff=256, recurrent_layers=(1, 3), global_layers=(2,),
+                         gla_use_rope=True, sliding_window=8, context_len=256)
     model = Memora(cfg2)
     idx = torch.randint(0, cfg2.vocab_size, (2, 40))
     logits = model(idx)
