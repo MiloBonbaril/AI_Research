@@ -20,6 +20,7 @@ Le script :
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -33,6 +34,13 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from model_interface import LanguageModel
+
+
+def _amp(device: str):
+    """Autocast bf16 sur CUDA (pas de GradScaler nécessaire en bf16), no-op ailleurs."""
+    if device == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +124,7 @@ def train_model(
     log_interval: int = 50,
     max_steps: int | None = None,
     wandb_run=None,
+    use_compile: bool = False,
 ) -> TrainResult:
     """
     Entraîne un modèle, soit pendant `duration_seconds` secondes, soit pendant
@@ -129,6 +138,8 @@ def train_model(
 
     model.to(device)
     model.train()
+    if use_compile and device == "cuda":
+        model = torch.compile(model)   # kernels fusés (flex_attention, GLA, SwiGLU…)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1)
 
@@ -195,7 +206,8 @@ def train_model(
                 x, y = next(data_iter)
 
             x, y = x.to(device), y.to(device)
-            loss = model.loss(x, y) / grad_accum_steps
+            with _amp(device):
+                loss = model.loss(x, y) / grad_accum_steps
             loss.backward()
             accum_loss += loss.item()
 
@@ -298,7 +310,8 @@ def evaluate(model: LanguageModel, val_loader: DataLoader, device: str, max_batc
         if i >= max_batches:
             break
         x, y = x.to(device), y.to(device)
-        total_loss += model.loss(x, y).item()
+        with _amp(device):
+            total_loss += model.loss(x, y).item()
         n += 1
     model.train()
     return total_loss / max(n, 1)
@@ -357,6 +370,8 @@ def main():
     parser.add_argument("--log-interval", type=int, default=50, help="Fréquence de log console en steps")
     parser.add_argument("--no-wandb", action="store_true", help="Désactiver le logging Weights & Biases")
     parser.add_argument("--wandb-project", type=str, default="memora-vs-gpt2", help="Nom du projet wandb")
+    parser.add_argument("--no-compile", action="store_true", help="Désactiver torch.compile (CUDA only)")
+    parser.add_argument("--grad-checkpoint", action="store_true", help="Gradient checkpointing des couches GLA Memora (moins de VRAM, plus lent)")
     args = parser.parse_args()
     use_wandb = not args.no_wandb
 
@@ -386,7 +401,8 @@ def main():
     # vocab_size doit matcher le tokenizer du dataset (tiktoken gpt2 = 50257),
     # sinon les ids ≥ 49152 débordent tok_embd → CUDA device-side assert.
     # Même vocab que GPT-2 = comparaison val_loss équitable.
-    model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
+    model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
+                                  grad_checkpoint=args.grad_checkpoint))
     model_a_name = "Memora"
 
     model_b = GPT2(GPT2Config(dropout=0.1, context_len=args.context_len))
@@ -403,7 +419,7 @@ def main():
         duration_seconds=duration, lr=args.lr,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
-        wandb_run=run_a,
+        wandb_run=run_a, use_compile=not args.no_compile,
     )
     if run_a is not None:
         run_a.finish()
@@ -418,7 +434,7 @@ def main():
         duration_seconds=duration, lr=args.lr,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
-        wandb_run=run_b,
+        wandb_run=run_b, use_compile=not args.no_compile,
     )
     if run_b is not None:
         run_b.finish()

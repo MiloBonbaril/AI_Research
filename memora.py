@@ -22,8 +22,24 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
 from model_interface import BaseModelConfig, LanguageModel
+
+# flex_attention DOIT être compilé pour atteindre le débit d'un kernel flash : en eager
+# il est ~40× plus lent que SDPA. On le compile ici une fois pour que les couches locales
+# soient rapides même si le modèle global n'est pas (ou est mal) compilé (graph break sur
+# la création du block_mask). torch.compile est paresseux → aucun coût à l'import.
+_flex_attention = torch.compile(flex_attention)
+
+# Kernel GLA fusé (Triton) — accélère les couches récurrentes sur GPU.
+# Absent (CPU, pas de CUDA, ou non installé) → repli sur _chunked en pur torch,
+# qui reste la référence testée contre _recurrent dans __main__.
+try:
+    from fla.ops.gla import chunk_gla as _fla_chunk_gla
+except Exception:  # pragma: no cover - dépend de l'install/GPU
+    _fla_chunk_gla = None
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +87,9 @@ class MemoraConfig(BaseModelConfig):
 
     tie_embeddings: bool = True
     bias: bool = False
+
+    # --- mémoire / débit ---
+    grad_checkpoint: bool = False  # checkpoint des blocs GLA (recompute au backward) si VRAM-bound
 
     # alias lisibilité (read-only)
     @property
@@ -155,7 +174,8 @@ class LocalAttention(nn.Module):
             self.q_norm = RMSNorm(self.hd, c.norm_eps)
             self.k_norm = RMSNorm(self.hd, c.norm_eps)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+                block_mask) -> torch.Tensor:
         B, T, _ = x.shape
         q = self.q_proj(x).view(B, T, self.n_head, self.hd).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_kv, self.hd).transpose(1, 2)
@@ -169,20 +189,19 @@ class LocalAttention(nn.Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        # GQA : répéter K,V pour couvrir les têtes Q (4 têtes Q / tête KV)
-        rep = self.n_head // self.n_kv
-        k = k.repeat_interleave(rep, dim=1)
-        v = v.repeat_interleave(rep, dim=1)
-
-        # Masque causal + fenêtre : on garde j tel que 0 <= i-j < window.
-        # ponytail: masque dense (T,T) — O(T²) mémoire. Remplacer par
-        # flash_attn window_size=(window-1,0) si le débit l'exige.
-        i = torch.arange(T, device=x.device)[:, None]
-        j = torch.arange(T, device=x.device)[None, :]
-        allowed = (i >= j) & (i - j < self.window)
-        attn_mask = torch.where(allowed, 0.0, float("-inf")).to(x.dtype)
-
-        y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        if x.is_cuda:
+            # flex_attention : fenêtre glissante via block_mask (construit/caché une fois par
+            # Memora, cf. _sliding_block_mask) + GQA native (enable_gqa). Kernel fusé sous
+            # torch.compile → plus de masque dense (T,T) ni de repeat_interleave K,V.
+            y = _flex_attention(q, k, v, block_mask=block_mask, enable_gqa=True)
+        else:
+            # repli CPU (self-test) : flex_attention ne supporte pas le backward sur CPU.
+            # SDPA + enable_gqa garde la GQA native ; masque additif fenêtré sur CPU = OK.
+            i = torch.arange(T, device=x.device)[:, None]
+            j = torch.arange(T, device=x.device)[None, :]
+            allowed = (i >= j) & (i - j < self.window)
+            attn_mask = torch.where(allowed, 0.0, float("-inf")).to(q.dtype)
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, enable_gqa=True)
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.hd)
         return self.o_proj(y)
 
@@ -240,11 +259,23 @@ class GatedLinearAttention(nn.Module):
         g = F.logsigmoid(a_logit).clamp(min=-10.0).view(*shp).transpose(1, 2)
         return q, k, v, g
 
-    def forward(self, x: torch.Tensor, cos=None, sin=None) -> torch.Tensor:
-        # cos/sin ignorés : pas de RoPE sur les couches GLA (position portée par l'état).
-        q, k, v, g = self._proj(x)
-        o = self._chunked(q, k, v, g)
-        o = o.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], self.n_head * self.hd)
+    def forward(self, x: torch.Tensor, cos=None, sin=None, block_mask=None) -> torch.Tensor:
+        # cos/sin/block_mask ignorés : pas de RoPE ni de masque sur GLA (position dans l'état).
+        q, k, v, g = self._proj(x)            # (B,H,T,d)
+        if _fla_chunk_gla is not None and x.is_cuda:
+            # Kernel Triton fusé : layout (B,T,H,d) ; scale=1.0 car q n'est pas pré-scalé
+            # (notre _chunked/_recurrent non plus). Équivalent à _chunked à la précision
+            # tf32 du kernel près (cf. rapport).
+            # Le kernel Triton exige un dtype homogène. Sous autocast, QK-Norm repromeut q,k
+            # en fp32 et g sort en fp32, alors que v reste en bf16 → on réaligne tout sur v
+            # (dtype de calcul réel : bf16 sous autocast, fp32 sinon).
+            dt = v.dtype
+            qf, kf, vf, gf = (t.transpose(1, 2).contiguous().to(dt) for t in (q, k, v, g))
+            o, _ = _fla_chunk_gla(qf, kf, vf, gf, scale=1.0)   # (B,T,H,d)
+            o = o.reshape(x.shape[0], x.shape[1], self.n_head * self.hd)
+        else:
+            o = self._chunked(q, k, v, g)     # repli pur torch (CPU / pas de fla)
+            o = o.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], self.n_head * self.hd)
         o = o * torch.sigmoid(self.g_proj(x))   # output gate
         return self.o_proj(o)
 
@@ -321,13 +352,15 @@ class GatedLinearAttention(nn.Module):
 class Block(nn.Module):
     def __init__(self, c: MemoraConfig, recurrent: bool):
         super().__init__()
+        self.recurrent = recurrent
         self.norm_1 = RMSNorm(c.n_embd, c.norm_eps)
         self.mixer = GatedLinearAttention(c) if recurrent else LocalAttention(c)
         self.norm_2 = RMSNorm(c.n_embd, c.norm_eps)
         self.mlp = SwiGLU(c)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        x = x + self.mixer(self.norm_1(x), cos, sin)
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+                block_mask) -> torch.Tensor:
+        x = x + self.mixer(self.norm_1(x), cos, sin, block_mask)
         x = x + self.mlp(self.norm_2(x))
         return x
 
@@ -350,6 +383,7 @@ class Memora(LanguageModel):
         self.blocks = nn.ModuleList([Block(c, i in rec) for i in range(c.n_layer)])
         self.norm_f = RMSNorm(c.n_embd, c.norm_eps)
         self.lm_head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
+        self._bm_cache: dict = {}   # block_masks flex_attention, cachés par (T, device)
 
         # Cache RoPE (cos/sin) calculé une fois, partagé par toutes les couches locales.
         # Buffers non-persistants (recalculables) → suivent .to(device), absents du state_dict.
@@ -386,12 +420,32 @@ class Memora(LanguageModel):
             self.rope_cos, self.rope_sin = cos, sin
         return self.rope_cos[:T].to(dtype), self.rope_sin[:T].to(dtype)
 
+    def _sliding_block_mask(self, T: int, device):
+        """BlockMask flex_attention (causal ∩ fenêtre glissante), construit une fois par
+        (T, device) puis caché — remplace le masque dense reconstruit à chaque couche."""
+        key = (T, str(device))
+        bm = self._bm_cache.get(key)
+        if bm is None:
+            W = self.config.sliding_window
+            def mask_mod(b, h, qi, ki):
+                return (qi >= ki) & (qi - ki < W)
+            bm = create_block_mask(mask_mod, B=None, H=None, Q_LEN=T, KV_LEN=T, device=device)
+            self._bm_cache[key] = bm
+        return bm
+
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         B, T = idx.shape
         x = self.tok_embd(idx)
         cos, sin = self._rope(T, x.device, x.dtype)
+        block_mask = self._sliding_block_mask(T, x.device)
+        ckpt = self.config.grad_checkpoint and self.training
         for block in self.blocks:
-            x = block(x, cos, sin)
+            if ckpt and block.recurrent:
+                # recompute des couches GLA au backward → moins d'activations stockées
+                x = torch.utils.checkpoint.checkpoint(block, x, cos, sin, block_mask,
+                                                      use_reentrant=False)
+            else:
+                x = block(x, cos, sin, block_mask)
         x = self.norm_f(x)
         logits = self.lm_head(x)
         if self.config.logit_cap is not None:
