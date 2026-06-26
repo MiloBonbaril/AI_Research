@@ -387,7 +387,7 @@ def main():
     # sinon les ids ≥ 49152 débordent tok_embd → CUDA device-side assert.
     # Même vocab que GPT-2 = comparaison val_loss équitable.
     model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
-    model_a_name = "Memora"
+    model_a_name = "Memora Flash"
 
     model_b = GPT2(GPT2Config(dropout=0.1, context_len=args.context_len))
     model_b_name = "GPT-2 Small"

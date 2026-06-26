@@ -48,7 +48,9 @@ class MemoraConfig(BaseModelConfig):
     # --- GQA / dimensions attention ---
     n_kv_heads: int = 3            # têtes key/value (GQA) → cache KV /4
     head_dim: int = 64            # n_embd // n_head
-    d_ff: int = 2048              # taille interne SwiGLU (~2.67x)
+    d_ff: int = 1920              # taille interne SwiGLU (2.5×). 1920 plutôt que 2048
+                                  # car la couche GLA (5 proj. pleines + gate low-rank)
+                                  # coûte plus qu'une couche d'attention → ramène à ~126M.
 
     # --- hybridation ---
     recurrent_layers: tuple = (3, 7, 10, 13)   # indices des couches GLA
@@ -141,7 +143,6 @@ class LocalAttention(nn.Module):
         self.n_kv = c.n_kv_heads
         self.hd = c.head_dim
         self.window = c.sliding_window
-        self.theta = c.rope_theta
         assert self.n_head % self.n_kv == 0, "n_head doit être multiple de n_kv_heads"
 
         self.q_proj = nn.Linear(c.n_embd, self.n_head * self.hd, bias=c.bias)
@@ -154,7 +155,7 @@ class LocalAttention(nn.Module):
             self.q_norm = RMSNorm(self.hd, c.norm_eps)
             self.k_norm = RMSNorm(self.hd, c.norm_eps)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
         q = self.q_proj(x).view(B, T, self.n_head, self.hd).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_kv, self.hd).transpose(1, 2)
@@ -164,7 +165,7 @@ class LocalAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
 
-        cos, sin = build_rope_cache(T, self.hd, self.theta, x.device, x.dtype)
+        # cos/sin précalculés au niveau modèle (cf. Memora._rope), pas de recompute ici
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -194,7 +195,13 @@ class GatedLinearAttention(nn.Module):
     Les deux formes sont numériquement équivalentes (cf. test __main__).
     """
 
-    def __init__(self, c: MemoraConfig, chunk: int = 64):
+    def __init__(self, c: MemoraConfig, chunk: int = 16):
+        # chunk=16 : la voie chunkée rescale les clés par exp(-Gc), qui déborde (→NaN)
+        # quand la décroissance cumulée sur un chunk est forte. Le pire exposant vaut
+        # ~chunk × |log(décroissance)| ; chunk=16 reste stable jusqu'à une rétention ~0.01
+        # (à chunk=64, une rétention apprise de 0.1 suffit à faire NaN).
+        # ponytail: chunk fixe à un niveau. Pour throughput max sans ce plafond,
+        # passer à fla (kernel Triton à sous-chunks). Cf. _chunked.
         super().__init__()
         self.n_head = c.n_head
         self.hd = c.head_dim
@@ -227,11 +234,13 @@ class GatedLinearAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         a_logit = self.a_high(self.a_low(x)) + self.a_bias
-        a = torch.sigmoid(a_logit).view(*shp).transpose(1, 2)   # décroissance ∈(0,1)
-        g = torch.log(a)                                        # ≤ 0
+        # log(décroissance) directement via logsigmoid : numériquement stable même
+        # si a_logit << 0 (log(sigmoid(x)) naïf donnerait log(0) = -inf → NaN dans cumsum).
+        g = F.logsigmoid(a_logit).view(*shp).transpose(1, 2)    # ≤ 0
         return q, k, v, g
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos=None, sin=None) -> torch.Tensor:
+        # cos/sin ignorés : pas de RoPE sur les couches GLA (position portée par l'état).
         q, k, v, g = self._proj(x)
         o = self._chunked(q, k, v, g)
         o = o.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], self.n_head * self.hd)
@@ -283,7 +292,12 @@ class GatedLinearAttention(nn.Module):
 
     @torch.no_grad()
     def _recurrent(self, q, k, v, g):
-        """Forme récurrente de référence (lente). Sert au test d'équivalence."""
+        """Forme récurrente de référence (lente). Sert au test d'équivalence.
+
+        Limite connue : sans état persistant entre appels → inutilisable tel quel
+        pour de l'inférence streaming réelle. Une variante stateful (qui garde S
+        d'un appel au suivant) serait nécessaire pour exploiter le contexte illimité.
+        """
         B, H, T, d = q.shape
         q, k, v, a = q.float(), k.float(), v.float(), g.float().exp()
         S = torch.zeros(B, H, d, d, device=q.device)
@@ -306,8 +320,8 @@ class Block(nn.Module):
         self.norm_2 = RMSNorm(c.n_embd, c.norm_eps)
         self.mlp = SwiGLU(c)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.mixer(self.norm_1(x))
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        x = x + self.mixer(self.norm_1(x), cos, sin)
         x = x + self.mlp(self.norm_2(x))
         return x
 
@@ -330,6 +344,12 @@ class Memora(LanguageModel):
         self.blocks = nn.ModuleList([Block(c, i in rec) for i in range(c.n_layer)])
         self.norm_f = RMSNorm(c.n_embd, c.norm_eps)
         self.lm_head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
+
+        # Cache RoPE (cos/sin) calculé une fois, partagé par toutes les couches locales.
+        # Buffers non-persistants (recalculables) → suivent .to(device), absents du state_dict.
+        cos, sin = build_rope_cache(c.context_len, c.head_dim, c.rope_theta, "cpu", torch.float32)
+        self.register_buffer("rope_cos", cos, persistent=False)
+        self.register_buffer("rope_sin", sin, persistent=False)
         if c.tie_embeddings:
             self.lm_head.weight = self.tok_embd.weight   # même objet → params comptés une fois
 
@@ -352,11 +372,20 @@ class Memora(LanguageModel):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def _rope(self, T: int, device, dtype):
+        """Renvoie (cos, sin) tronqués à T, dans le dtype de x. Étend le cache si T dépasse."""
+        if T > self.rope_cos.size(0):  # contexte plus long que prévu → reconstruire
+            cos, sin = build_rope_cache(T, self.config.head_dim, self.config.rope_theta,
+                                        device, torch.float32)
+            self.rope_cos, self.rope_sin = cos, sin
+        return self.rope_cos[:T].to(dtype), self.rope_sin[:T].to(dtype)
+
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         B, T = idx.shape
         x = self.tok_embd(idx)
+        cos, sin = self._rope(T, x.device, x.dtype)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, cos, sin)
         x = self.norm_f(x)
         logits = self.lm_head(x)
         if self.config.logit_cap is not None:
