@@ -18,19 +18,25 @@ source venv/bin/activate
 python memora.py      # shape checks + GLA chunked==recurrent equivalence + stability + param budget
 python gpt2.py        # (no __main__ self-test; import-only)
 
-# Comparative training (Memora vs GPT-2, sequential, same budget each)
-python train.py                          # 300s/model, wandb on
-python train.py --max-steps 200          # fixed steps instead of time (overrides --duration)
-python train.py --duration 600 --no-wandb
-python train.py --batch-size 4 --grad-accum 8   # effective batch = batch_size × grad_accum
+# Full Memora training (save/resume, WSD schedule, wandb)
+python train.py --steps 10000                          # ~655M tokens, wandb on
+python train.py --steps 20000 --resume                 # reprend depuis checkpoints/latest.pt
+python train.py --steps 5000 --no-wandb --no-compile   # debug/CPU
+python train.py --batch-size 4 --grad-accum 8          # batch eff = batch_size × grad_accum × context_len tok
+
+# Comparative training (Memora vs GPT-2, même budget chacun)
+python compare.py                                      # 300s/model, wandb on
+python compare.py --max-steps 200                      # steps fixes (override --duration)
+python compare.py --duration 600 --no-wandb
 
 # Text generation (GPT-2 only wired in CLI)
 python generate.py --pretrained --prompt "Once upon"   # loads HF gpt2 weights
 ```
 
 There is no requirements.txt. Deps (in `venv`): `torch`, `tiktoken`, `datasets`,
-`transformers`, `wandb`. First `train.py` run tokenizes wikitext-103 and caches
-tensors to `.cache/wikitext103_{split}.pt`; subsequent runs load from cache.
+`transformers`, `wandb`. First run tokenizes wikitext-103 and caches tensors to
+`.cache/wikitext103_{split}.pt`; subsequent runs load from cache.
+`dataset.py` is the shared module for `WikiTextDataset` and `evaluate`.
 
 ## Architecture
 
@@ -57,10 +63,15 @@ the Conv1D weights to `nn.Linear` layout.
 - SwiGLU MLP, RMSNorm, RoPE (no learned pos-embeddings), z-loss, no biases on
   content projections. GLA layers deliberately skip RoPE (position lives in the state).
 
-**Equal-budget training (`train.py`)** is the whole point: `train_model` runs each
+**`train.py`** — full Memora training: WSD schedule (warmup→stable→cosine decay),
+atomic checkpointing (`checkpoints/latest.pt` + `best.pt`), AdamW fused kernel,
+grad norm logging. Resume with `--resume`. Imports `WikiTextDataset`/`evaluate` from `dataset.py`.
+
+**Equal-budget comparison (`compare.py`)** pits Memora vs GPT-2: `train_model` runs each
 model for the *same* `duration_seconds` OR `max_steps` (exactly one, asserted),
-AdamW + manual cosine schedule with warmup. wandb runs are grouped by run timestamp
-so the two models' curves overlay. Results dumped to `results/{timestamp}_{model}.json`.
+AdamW + manual cosine schedule with warmup. wandb runs grouped by timestamp so curves
+overlay. Results dumped to `results/{timestamp}_{model}.json`. To add a model, wire it
+into `compare.py:main` (the `model_a`/`model_b` block).
 
 ## Gotchas
 
