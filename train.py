@@ -197,6 +197,19 @@ def main():
 
     model.train()
 
+    # Warmup torch.compile : force la trace/compilation avant la boucle (évite la montée lente
+    # de tok/sec visible sur les ~300 premiers steps). Sans effet si --no-compile.
+    if not args.no_compile and device == "cuda":
+        print("Warmup torch.compile (1 forward+backward dummy)...")
+        _dummy = torch.randint(0, 50257, (args.batch_size, args.context_len), device=device)
+        with _amp(device):
+            _wloss = model.loss(_dummy[:, :-1], _dummy[:, 1:])
+        _wloss.backward()
+        optimizer.zero_grad()
+        torch.cuda.synchronize()
+        del _dummy, _wloss
+        print("Warmup terminé.")
+
     # -- wandb ---
     run = None
     if not args.no_wandb:
