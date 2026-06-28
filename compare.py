@@ -1,20 +1,28 @@
 """
-Script d'entraînement comparatif — deux modèles, même budget temps.
+Script d'entraînement comparatif — deux modèles, même budget compute.
 
-Entraîne deux LanguageModel sur wikitext-103 pendant exactement la même
-durée (en secondes murales), puis compare leurs loss de validation.
+Entraîne deux LanguageModel sur wikitext-103 puis compare leurs loss de validation.
 
 Usage :
-    python compare.py                                    # GPT-2 vs GPT-2 (sanity check)
-    python compare.py --duration 600                     # 10 min par modèle
+    python compare.py --max-steps 2000                   # N steps par modèle (recommandé)
+    python compare.py --duration 600                     # 10 min par modèle (wall-clock)
     python compare.py --batch-size 4 --grad-accum 8      # simule batch=32
 
 Le script :
   1. Tokenise wikitext-103 une seule fois (cache sur disque)
-  2. Entraîne modèle A pendant --duration secondes
-  3. Entraîne modèle B pendant exactement la même durée
+  2. Entraîne modèle A
+  3. Entraîne modèle B
   4. Évalue les deux sur le split validation
   5. Affiche le résumé comparatif
+
+Axe de comparaison : tokens_seen (= steps × batch × grad_accum × context_len).
+  Avec --max-steps les deux modèles voient exactement le même nombre de tokens,
+  indépendamment de leur vitesse wall-clock. C'est l'axe X dans W&B.
+  Budget FLOPs : Memora ≈ 546 GFLOPs/step vs GPT-2 ≈ 583 GFLOPs/step (T=2048),
+  soit un avantage théorique Memora de ~6 %. Le wall-clock Memora est ~1.57x plus
+  lent (RTX 5070 Ti, B=2, T=2048) — flex_attention + GLA Triton moins efficaces
+  que SDPA classique. torch.compile ne réduit pas l'écart (flex_attention et GLA
+  sont déjà JIT-compilés au niveau module).
 """
 
 from __future__ import annotations
@@ -152,8 +160,8 @@ def train_model(
             wandb_run.log({
                 "train/loss": accum_loss,
                 "train/lr": current_lr,
-                "train/tokens_seen": tokens_seen,
                 "train/tok_per_sec": tokens_seen / elapsed,
+                "tokens_seen": tokens_seen,
             }, step=step)
 
         if step % log_interval == 0:
@@ -180,7 +188,7 @@ def train_model(
     print(f"  [{model_name}] Val loss: {val_loss:.4f} | Val perplexity: {val_ppl:.2f}\n")
 
     if wandb_run is not None:
-        wandb_run.log({"val/loss": val_loss, "val/perplexity": val_ppl}, step=step)
+        wandb_run.log({"val/loss": val_loss, "val/perplexity": val_ppl, "tokens_seen": tokens_seen}, step=step)
         wandb_run.summary.update({
             "val/loss": val_loss,
             "val/perplexity": val_ppl,
@@ -204,7 +212,7 @@ def train_model(
 def init_wandb(project: str, model_name: str, model: LanguageModel, args, device: str, group: str):
     """Démarre un run wandb par modèle, groupés → courbes superposées dans le projet."""
     import wandb
-    return wandb.init(
+    run = wandb.init(
         project=project,
         name=model_name,
         group=group,
@@ -215,13 +223,19 @@ def init_wandb(project: str, model_name: str, model: LanguageModel, args, device
             "batch_size": args.batch_size,
             "grad_accum": args.grad_accum,
             "effective_batch": args.batch_size * args.grad_accum,
+            "tokens_per_step": args.batch_size * args.grad_accum * args.context_len,
             "lr": args.lr,
             "context_len": args.context_len,
             "max_steps": args.max_steps,
             "duration": None if args.max_steps is not None else args.duration,
             "device": device,
+            "comparison_axis": "tokens_seen",
         },
     )
+    # tokens_seen comme axe X → courbes Memora/GPT-2 comparables à iso-compute
+    run.define_metric("tokens_seen")
+    run.define_metric("*", step_metric="tokens_seen")
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +282,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=None, help="Entraîner sur N steps au lieu d'une durée (override --duration)")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--grad-accum", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=6e-4)
     parser.add_argument("--lr-memora", type=float, default=6e-4, help="LR Memora (axe 11)")
     parser.add_argument("--context-len", type=int, default=2048)
     parser.add_argument("--device", type=str, default="auto")
@@ -298,12 +312,12 @@ def main():
     from gpt2 import GPT2, GPT2Config
     from memora import Memora, MemoraConfig
 
-    model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
+    model_b = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
                                   grad_checkpoint=args.grad_checkpoint))
-    model_a_name = "Memora"
+    model_b_name = "Memora"
 
-    model_b = GPT2(GPT2Config(dropout=0.1, context_len=args.context_len))
-    model_b_name = "GPT-2 Small"
+    model_a = GPT2(GPT2Config(dropout=0.1, context_len=args.context_len))
+    model_a_name = "GPT-2 Small"
 
     duration  = None if args.max_steps is not None else args.duration
     timestamp = time.strftime("%Y%m%d_%H%M%S")
