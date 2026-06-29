@@ -1,5 +1,6 @@
 """
-Memora — LLM "next-gen" à budget GPT-2 Small (~124-127M params).
+MemoraGLA — LLM "next-gen" à budget GPT-2 Small (~124-127M params).
+Variante GLA-dominante: 10 couches GLA, 2 globales, 2 locales
 
 Architecture hybride sub-quadratique destinée à battre GPT-2 Small :
   - Attention locale (fenêtre glissante) + GQA sur la majorité des couches
@@ -64,17 +65,19 @@ class MemoraConfig(BaseModelConfig):
     # --- GQA / dimensions attention ---
     n_kv_heads: int = 3            # têtes key/value (GQA) → cache KV /4
     head_dim: int = 64            # n_embd // n_head (couches d'attention)
-    d_ff: int = 2000              # taille interne SwiGLU (~2.6×). Remonté de 1920 → 2000
-                                  # (axe 10) avec les params libérés par gla_head_dim réduit ;
-                                  # reste ~126M (budget GPT-2). 4× plein (3072) coûterait +37M,
-                                  # hors budget.
+    d_ff: int = 1850              # taille interne SwiGLU. Réduit de 2000 → 1850 pour compenser
+                                  # le surcoût params des 6 couches GLA ajoutées (10 total vs 4) ;
+                                  # reste ~126.5M (budget GPT-2). GLA coûte plus que l'attention
+                                  # locale (5 proj. full-width vs 2+2 GQA), d'où la correction MLP.
 
     # --- hybridation ---
-    recurrent_layers: tuple = (3, 7, 10, 13)   # indices des couches GLA
-    global_layers: tuple = (5, 11)             # indices des couches d'attention GLOBALE (softmax
-                                               # dense causale) — rétablissent le long-range que la
-                                               # fenêtre 512 ampute (axe 8). Free en params (mêmes
-                                               # projections qu'une couche locale). Le reste = local.
+    # Architecture Qwen-style GLA-dominante : 10 GLA / 2 global / 2 local.
+    # local = (3, 7) — les seules couches avec fenêtre glissante.
+    recurrent_layers: tuple = (0, 1, 2, 4, 6, 8, 9, 11, 12, 13)   # 10 couches GLA
+    global_layers: tuple = (5, 10)             # 2 couches d'attention GLOBALE (softmax dense
+                                               # causale) — rétablissent le long-range que la
+                                               # fenêtre 512 ampute. Free en params (mêmes
+                                               # projections). Le reste = local (3, 7).
     sliding_window: int = 512
 
     # --- position ---
@@ -89,8 +92,10 @@ class MemoraConfig(BaseModelConfig):
     # --- GLA ---
     gla_low_rank: int = 16
     gla_head_dim: int = 48            # head_dim PROPRE aux couches GLA (< head_dim attention=64).
-                                      # Réduit le coût des 5 projections GLA → finance d_ff (axe 10).
-                                      # fla impose q/k/v/g de même forme → on garde n_head têtes.
+                                      # Réduit le coût des 5 projections GLA. fla impose q/k/v/g de
+                                      # même forme → on garde n_head têtes.
+                                      # Variante ghd=64 d_ff=1600 → ~125.9M (+ capacité état GLA,
+                                      # - capacité MLP). Passer à MemoraConfig(gla_head_dim=64,d_ff=1600).
     gla_use_rope: bool = False        # signal positionnel RoPE sur GLA (axe 11). Off par défaut :
                                       # la position vit dans l'état ; à activer comme expérience.
     gla_decay_init_bias: float = 3.0  # biais d'init du gate → décroissance ~sigmoid(3)=0.95 (knob de calibration)
@@ -396,7 +401,7 @@ class Block(nn.Module):
 # Modèle
 # ---------------------------------------------------------------------------
 
-class Memora(LanguageModel):
+class MemoraGLA(LanguageModel):
     """LLM hybride local-attention + GLA, budget GPT-2 Small."""
 
     def __init__(self, config: MemoraConfig | None = None):
@@ -499,7 +504,7 @@ class Memora(LanguageModel):
         return ce
 
     @classmethod
-    def from_pretrained(cls, model_name: str) -> "Memora":
+    def from_pretrained(cls, model_name: str) -> "MemoraGLA":
         # Architecture novatrice : aucun poids pré-entraîné HF à mapper.
         raise NotImplementedError(
             "Memora est une architecture nouvelle, sans checkpoint HuggingFace. "
@@ -537,7 +542,7 @@ if __name__ == "__main__":
     cfg2 = MemoraConfig(vocab_size=512, n_embd=128, n_head=4, n_kv_heads=2, head_dim=32,
                          n_layer=4, d_ff=256, recurrent_layers=(1, 3), global_layers=(2,),
                          gla_use_rope=True, sliding_window=8, context_len=256)
-    model = Memora(cfg2)
+    model = MemoraGLA(cfg2)
     idx = torch.randint(0, cfg2.vocab_size, (2, 40))
     logits = model(idx)
     assert logits.shape == (2, 40, cfg2.vocab_size), logits.shape
@@ -553,5 +558,5 @@ if __name__ == "__main__":
     print(f"generate OK {tuple(out.shape)}")
 
     # 4. budget params à la config réelle
-    full = Memora(MemoraConfig())
+    full = MemoraGLA(MemoraConfig())
     print(f"budget réel : {full.num_params()/1e6:.1f}M params")

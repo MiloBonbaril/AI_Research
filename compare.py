@@ -311,13 +311,15 @@ def main():
 
     from gpt2 import GPT2, GPT2Config
     from memora import Memora, MemoraConfig
+    from memora_gla import MemoraGLA
 
-    model_b = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
+    model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
                                   grad_checkpoint=args.grad_checkpoint))
-    model_b_name = "Memora"
+    model_a_name = "Memora"
 
-    model_a = GPT2(GPT2Config(dropout=0.1, context_len=args.context_len))
-    model_a_name = "GPT-2 Small"
+    model_b = MemoraGLA(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
+                                  grad_checkpoint=args.grad_checkpoint))
+    model_b_name = "MemoraGLA"
 
     duration  = None if args.max_steps is not None else args.duration
     timestamp = time.strftime("%Y%m%d_%H%M%S")
