@@ -1,50 +1,76 @@
 """
-Script de génération de texte — fonctionne avec n'importe quel LanguageModel.
+Script de génération de texte — compare plusieurs modèles avec métriques d'inférence.
 
 Usage :
-    python generate.py                          # GPT-2 from scratch (poids aléatoires)
-    python generate.py --pretrained             # GPT-2 avec poids HuggingFace
-    python generate.py --prompt "Once upon"     # prompt custom
-    python generate.py --tokens 200             # nombre de tokens à générer
+    python -m training.generate                          # Cortex + GPT-2 from scratch
+    python -m training.generate --pretrained             # GPT-2 avec poids HuggingFace
+    python -m training.generate --prompt "Once upon"
+    python -m training.generate --tokens 200
 """
 
+from __future__ import annotations
+
 import argparse
+import time
 
 import torch
 from tiktoken import get_encoding
 
-from gpt2 import GPT2
-from model_interface import LanguageModel
+from models.cortex import Cortex, CortexConfig
+from models.gpt2 import GPT2, GPT2Config
+from models.model_interface import LanguageModel
 
 
-def generate(
+def generate_with_metrics(
     model: LanguageModel,
     prompt: str,
     max_new_tokens: int,
     temperature: float,
     top_k: int | None,
     device: str,
-) -> str:
-    """Encode le prompt, génère, décode."""
+) -> tuple[str, float, float | None]:
+    """
+    Génère du texte et retourne (texte_complet, tok/s, VRAM_peak_MB ou None).
+    Utilise torch.inference_mode() pour désactiver autograd et le suivi de version.
+    """
     enc = get_encoding("gpt2")
+    idx = torch.tensor([enc.encode(prompt)], dtype=torch.long, device=device)
 
-    tokens = enc.encode(prompt)
-    idx = torch.tensor([tokens], dtype=torch.long, device=device)
+    model.to(device).eval()
 
-    model.to(device)
-    model.eval()
+    if device == "cuda":
+        torch.cuda.synchronize(device)
+        torch.cuda.reset_peak_memory_stats(device)
 
-    output = model.generate(idx, max_new_tokens=max_new_tokens, temperature=temperature, top_k=top_k)
-    return enc.decode(output[0].tolist())
+    t0 = time.perf_counter()
+    with torch.inference_mode():
+        output = model.generate(idx, max_new_tokens=max_new_tokens, temperature=temperature, top_k=top_k)
+    if device == "cuda":
+        torch.cuda.synchronize(device)
+    elapsed = time.perf_counter() - t0
+
+    tok_per_sec = max_new_tokens / elapsed
+    vram_mb = torch.cuda.max_memory_allocated(device) / 1e6 if device == "cuda" else None
+    return enc.decode(output[0].tolist()), tok_per_sec, vram_mb
+
+
+def _print_result(name: str, text: str, tok_per_sec: float, vram_mb: float | None):
+    sep = "=" * 64
+    metrics = f"{tok_per_sec:.1f} tok/s"
+    if vram_mb is not None:
+        metrics += f"  |  VRAM peak: {vram_mb:.0f} MB"
+    print(f"\n{sep}\n  {name}  —  {metrics}\n{sep}")
+    print(text)
+    print(sep)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Génération de texte")
+    parser = argparse.ArgumentParser(description="Génération de texte — Cortex vs GPT-2")
     parser.add_argument("--prompt", type=str, default="Hello, I'm a language model,")
-    parser.add_argument("--tokens", type=int, default=100, help="Nombre de tokens à générer")
+    parser.add_argument("--tokens", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
-    parser.add_argument("--pretrained", action="store_true", help="Charger les poids HuggingFace")
+    parser.add_argument("--pretrained", action="store_true", help="Charger les poids HuggingFace pour GPT-2")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"])
     args = parser.parse_args()
 
@@ -52,21 +78,25 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     else:
         device = args.device
-
     print(f"Device: {device}")
 
-    if args.pretrained:
-        model = GPT2.from_pretrained("gpt2")
-    else:
-        model = GPT2()
+    models: list[tuple[str, LanguageModel]] = [
+        ("Cortex", Cortex(CortexConfig(vocab_size=50257))),
+        (
+            "GPT-2 (pretrained)" if args.pretrained else "GPT-2",
+            GPT2.from_pretrained("gpt2") if args.pretrained else GPT2(),
+        ),
+    ]
 
-    text = generate(model, args.prompt, args.tokens, args.temperature, args.top_k, device)
-    print("\n" + "=" * 60)
-    print(text)
-    print("=" * 60)
+    for name, model in models:
+        text, tok_per_sec, vram_mb = generate_with_metrics(
+            model, args.prompt, args.tokens, args.temperature, args.top_k, device
+        )
+        _print_result(name, text, tok_per_sec, vram_mb)
+        model.cpu()
+        if device == "cuda":
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
     main()
-
-# agy --conversation=275f74b0-eb58-4636-8e92-193b027fd88f
