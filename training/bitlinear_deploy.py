@@ -91,13 +91,14 @@ class BitLinearInference(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.norm(x)
+        if x.is_cuda:
+            from models.triton_kernels import ternary_matmul
+            return ternary_matmul(x, self.packed, self.gamma, self.out_features, self.in_features)
+        # CPU / MPS fallback : dépaquetage dense + F.linear
         W = unpack_ternary(self.packed, self.out_features, self.in_features, dtype=x.dtype)
-
         scale_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
-        x_q = (x * 127.0 / scale_x).round().clamp(-128, 127)  # int8, cohérent avec l'entraînement
-
-        y = F.linear(x_q, W, self.bias)
-        return y * (self.gamma * scale_x / 127.0)
+        x_q = (x * 127.0 / scale_x).round().clamp(-128, 127)
+        return F.linear(x_q, W, self.bias) * (self.gamma * scale_x / 127.0)
 
 
 # ---------------------------------------------------------------------------
