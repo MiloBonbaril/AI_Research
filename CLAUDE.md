@@ -4,10 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A from-scratch LLM research harness that pits a novel sub-quadratic architecture
-(**Memora**) against a reference **GPT-2 Small** under an *equal-budget* protocol
-(same wall-clock seconds or same step count per model), then compares validation
-loss/perplexity. Both train on wikitext-103. Comments and prints are in French.
+A from-scratch LLM research harness that pits novel sub-quadratic architectures
+against a reference **GPT-2 Small** under an *equal-budget* protocol (same wall-clock
+seconds or same step count per model), then compares validation loss/perplexity. All
+models train on wikitext-103. Comments and prints are in French.
+
+Current architectures under research: **Memora** (GLA + local attention hybrid) and
+**Cortex** (BitNet b1.58 ternary weights + GDN + SWA hybrid — see `models/cortex.md`
+for the full staged implementation plan).
 
 ## Commands
 
@@ -15,8 +19,8 @@ loss/perplexity. Both train on wikitext-103. Comments and prints are in French.
 source venv/bin/activate
 
 # Architecture self-checks (no GPU, no data needed) — run these first when touching models
-python memora.py      # shape checks + GLA chunked==recurrent equivalence + stability + param budget
-python gpt2.py        # (no __main__ self-test; import-only)
+python -m models.memora   # shape checks + GLA chunked==recurrent equivalence + stability + param budget
+python -m models.cortex   # BitLinear shape + backward + ternary-weight assert
 
 # Full Memora training (save/resume, WSD schedule, wandb)
 python train.py --steps 10000                          # ~655M tokens, wandb on
@@ -40,38 +44,52 @@ There is no requirements.txt. Deps (in `venv`): `torch`, `tiktoken`, `datasets`,
 
 ## Architecture
 
-**The contract is `model_interface.LanguageModel`** (ABC + `nn.Module`). Any model
+All model implementations live in `models/`. The package is `models/` with an empty
+`__init__.py`; import as `from models.model_interface import ...`.
+
+**The contract is `models/model_interface.LanguageModel`** (ABC + `nn.Module`). Any model
 implements `forward(idx) -> logits` and `from_pretrained(name)`; the base class
 provides `loss`, `generate`, and `num_params` (which excludes positional embeddings
 so param counts compare fairly across architectures). `BaseModelConfig` defaults are
 exactly GPT-2 Small (50257/1024/12/12/768). To add a model, subclass `LanguageModel`,
-subclass `BaseModelConfig`, and wire it into `train.py:main` (around line 383 — the
-`model_a`/`model_b` block).
+subclass `BaseModelConfig`, and wire it into `train.py:main` and `compare.py:main`.
 
-**`gpt2.py`** — faithful GPT-2 Small: pre-norm, learned pos-embeddings, GELU-tanh,
+**`models/gpt2.py`** — faithful GPT-2 Small: pre-norm, learned pos-embeddings, GELU-tanh,
 weight tying, biases everywhere. `from_pretrained` maps HF param names and transposes
 the Conv1D weights to `nn.Linear` layout.
 
-**`memora.py`** — the research architecture, hybrid sub-quadratic at ~126M params:
+**`models/memora.py`** — hybrid sub-quadratic at ~126M params:
 - Most layers are `LocalAttention` (sliding-window causal + GQA + RoPE + QK-Norm).
 - Layers in `recurrent_layers` are `GatedLinearAttention` (GLA) — linear attention
   with a fixed-size recurrent state for unbounded context. **Critical invariant:**
   the chunked training path (`_chunked`) and the recurrent reference (`_recurrent`)
-  must stay numerically equivalent — this is asserted in `memora.py.__main__`. GLA
+  must stay numerically equivalent — asserted in `models/memora.py.__main__`. GLA
   stability comes from never materializing absolute `e^{-Gc}` (only bounded
   differences `Gc_i - Gc_j ≤ 0`); preserve that if you edit `_chunked`.
 - SwiGLU MLP, RMSNorm, RoPE (no learned pos-embeddings), z-loss, no biases on
   content projections. GLA layers deliberately skip RoPE (position lives in the state).
 
+**`models/cortex.py`** — the next research architecture (Sparse-Cortex), brain-inspired:
+- **Ternary weights (BitNet b1.58):** all internal `nn.Linear` replaced by `BitLinear`
+  ({−1, 0, +1}, straight-through estimator on a full-precision latent weight).
+  Embeddings, RMSNorm, and LM head stay bf16 — never ternarize those.
+- **Hybrid token mixer:** ~3 GatedDeltaNet (GDN) layers per 1 SlidingWindowAttention
+  (SWA) layer. GDN = fixed-size recurrent state (linear cost, bounded VRAM); SWA =
+  exact local recall the compressed state loses. Do not remove SWA layers.
+- **ReLU² FFN:** squared ReLU induces ~90–95% activation sparsity emergently.
+- **Mixture-of-Recursions (phase 3+):** single shared block rebouclé R times per token,
+  routed by difficulty. Requires a router homeostasis loss to prevent depth collapse.
+- See `models/cortex.md` for the full staged implementation plan (one lever at a time,
+  measured against GPT-2 baseline before adding the next).
+
 **`train.py`** — full Memora training: WSD schedule (warmup→stable→cosine decay),
 atomic checkpointing (`checkpoints/latest.pt` + `best.pt`), AdamW fused kernel,
 grad norm logging. Resume with `--resume`. Imports `WikiTextDataset`/`evaluate` from `dataset.py`.
 
-**Equal-budget comparison (`compare.py`)** pits Memora vs GPT-2: `train_model` runs each
-model for the *same* `duration_seconds` OR `max_steps` (exactly one, asserted),
-AdamW + manual cosine schedule with warmup. wandb runs grouped by timestamp so curves
-overlay. Results dumped to `results/{timestamp}_{model}.json`. To add a model, wire it
-into `compare.py:main` (the `model_a`/`model_b` block).
+**Equal-budget comparison (`compare.py`)** pits two models: `train_model` runs each for
+the *same* `duration_seconds` OR `max_steps` (exactly one, asserted), AdamW + manual
+cosine schedule with warmup. wandb runs grouped by timestamp so curves overlay. Results
+dumped to `results/{timestamp}_{model}.json`.
 
 ## Gotchas
 
@@ -81,5 +99,9 @@ into `compare.py:main` (the `model_a`/`model_b` block).
   Keep both models on the same vocab for a fair comparison.
 - `Memora.from_pretrained` raises `NotImplementedError` by design (novel arch, no HF
   checkpoint) — train from scratch.
-- `generate.py` is hardcoded to GPT-2; Memora isn't wired into its CLI.
-- Editing GLA? Run `python memora.py` — the equivalence assert is the regression guard.
+- `generate.py` is hardcoded to GPT-2; Memora/Cortex aren't wired into its CLI.
+- Editing GLA? Run `python models/memora.py` — the equivalence assert is the regression guard.
+- **Cortex BitLinear training rules:** natif ternaire from scratch (never PTQ), LR ~2×
+  bf16 baseline, activations in int8 (never ternary), no biases in BitLinear layers.
+- **MoE ≠ VRAM savings** at small scale — all experts must reside in memory. Reserve MoE
+  for scale; ternary + MoR is the VRAM play at 124M.

@@ -37,8 +37,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from dataset import WikiTextDataset, evaluate, _amp
-from model_interface import LanguageModel
+from training.dataset import WikiTextDataset, evaluate, _amp
+from models.model_interface import LanguageModel
 
 
 # ---------------------------------------------------------------------------
@@ -309,17 +309,14 @@ def main():
     val_loader   = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                               num_workers=2, pin_memory=True)
 
-    from gpt2 import GPT2, GPT2Config
-    from memora import Memora, MemoraConfig
-    from memora_gla import MemoraGLA
+    from models.gpt2 import GPT2, GPT2Config
+    from models.cortex import Cortex, CortexConfig
 
-    model_a = Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
-                                  grad_checkpoint=args.grad_checkpoint))
-    model_a_name = "Memora"
+    model_a = Cortex(CortexConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
+    model_a_name = "Cortex"
 
-    model_b = MemoraGLA(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len,
-                                  grad_checkpoint=args.grad_checkpoint))
-    model_b_name = "MemoraGLA"
+    model_b = GPT2(GPT2Config(vocab_size=50257, dropout=0.1, context_len=args.context_len))
+    model_b_name = "GPT2"
 
     duration  = None if args.max_steps is not None else args.duration
     timestamp = time.strftime("%Y%m%d_%H%M%S")
