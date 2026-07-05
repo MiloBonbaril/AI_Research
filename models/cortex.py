@@ -31,33 +31,37 @@ class BitLinear(nn.Linear):
     Remplaçant de nn.Linear avec poids ternaires et activations int8.
 
     Forward :
-      W_q = clamp(round(W / (mean(|W|) + ε)), -1, +1)   ← ternaire
-      x_q = round(clamp(x · 127 / max(|x|), -128, 127)) ← int8 par token
-      y   = (W_q · x_q) · (γ · scale_x / 127)
+      x     = SubLN(x)                                    ← stabilité BitNet
+      W_q   = clamp(round(W / mean(|W|)), -1, +1)         ← ternaire (round avant clamp)
+      x_q   = round(clamp(x · 127 / max(|x|), -128, 127)) ← int8 par token
+      y     = F.linear(x_q, W_q) · (γ · scale_x / 127)
 
-    Backward : Straight-Through Estimator — le gradient traverse la
-    quantification comme si elle était l'identité.
+    Backward : Straight-Through Estimator sur W et x.
+    scale_x est détaché dans la déquantification pour éviter une fuite de gradient.
+    Le matmul est casté en bf16/fp16 si autocast est actif (évite la régression fp32).
     """
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, eps: float = 1e-5):
         super().__init__(in_features, out_features, bias=bias)
+        # SubLN : normalise l'entrée avant quantification (stabilité BitNet)
+        self.norm = nn.RMSNorm(in_features, eps=eps)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+
         W = self.weight
+        gamma = W.abs().mean().clamp(min=1e-5)
+        W_q = (W / gamma).round().clamp(-1, 1)      # round PUIS clamp (ordre canonique)
+        W_q = W + (W_q - W).detach()                # STE poids
 
-        # --- Quantification des poids (absmean → ternaire) ---
-        gamma = W.abs().mean()
-        W_q = (W / (gamma + 1e-8)).clamp(-1, 1).round()
-        W_q = W + (W_q - W).detach()  # STE : gradient = identité
+        scale_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
+        x_q = (x * 127.0 / scale_x).round().clamp(-128, 127)
+        x_q = x + (x_q - x).detach()               # STE activation
 
-        # --- Quantification des activations (absmax par token → int8) ---
-        scale_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8)
-        x_q = (x * 127.0 / scale_x).clamp(-128, 127).round()
-        x_q = x + (x_q - x).detach()  # STE
-
-        # --- Produit + déquantification ---
-        y = F.linear(x_q, W_q, self.bias)
-        return y * (gamma * scale_x / 127.0)
+        # Cast explicite pour rester dans la précision de l'autocast actif
+        dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else x.dtype
+        y = F.linear(x_q.to(dtype), W_q.to(dtype), self.bias)
+        return y * (gamma * scale_x.detach() / 127.0)
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 """
 Script de génération de texte — compare plusieurs modèles avec métriques d'inférence.
 
+Pour Cortex, les poids BitLinear sont packés en ternaire 2 bits avant la génération
+(convert_to_inference) : c'est le chemin de déploiement réel, pas le maître fp32.
+
 Usage :
-    python -m training.generate                          # Cortex + GPT-2 from scratch
+    python -m training.generate                          # Cortex (packé) + GPT-2 from scratch
     python -m training.generate --pretrained             # GPT-2 avec poids HuggingFace
     python -m training.generate --prompt "Once upon"
     python -m training.generate --tokens 200
@@ -19,6 +22,7 @@ from tiktoken import get_encoding
 from models.cortex import Cortex, CortexConfig
 from models.gpt2 import GPT2, GPT2Config
 from models.model_interface import LanguageModel
+from training.bitlinear_deploy import convert_to_inference, report_memory
 
 
 def generate_with_metrics(
@@ -64,6 +68,40 @@ def _print_result(name: str, text: str, tok_per_sec: float, vram_mb: float | Non
     print(sep)
 
 
+def run_cortex(args, device: str):
+    model = Cortex(CortexConfig(vocab_size=50257))
+    model.eval()
+
+    print("\n--- Cortex : poids avant packing ---")
+    report_memory(model, "avant packing")
+
+    convert_to_inference(model)
+
+    print("\n--- Cortex : poids après packing (2 bits/poids) ---")
+    report_memory(model, "après packing")
+
+    text, tok_per_sec, vram_mb = generate_with_metrics(
+        model, args.prompt, args.tokens, args.temperature, args.top_k, device
+    )
+    _print_result("Cortex (packé)", text, tok_per_sec, vram_mb)
+    model.cpu()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+
+def run_gpt2(args, device: str):
+    model = (GPT2.from_pretrained("gpt2") if args.pretrained else GPT2())
+    name = "GPT-2 (pretrained)" if args.pretrained else "GPT-2"
+
+    text, tok_per_sec, vram_mb = generate_with_metrics(
+        model, args.prompt, args.tokens, args.temperature, args.top_k, device
+    )
+    _print_result(name, text, tok_per_sec, vram_mb)
+    model.cpu()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Génération de texte — Cortex vs GPT-2")
     parser.add_argument("--prompt", type=str, default="Hello, I'm a language model,")
@@ -80,22 +118,8 @@ def main():
         device = args.device
     print(f"Device: {device}")
 
-    models: list[tuple[str, LanguageModel]] = [
-        ("Cortex", Cortex(CortexConfig(vocab_size=50257))),
-        (
-            "GPT-2 (pretrained)" if args.pretrained else "GPT-2",
-            GPT2.from_pretrained("gpt2") if args.pretrained else GPT2(),
-        ),
-    ]
-
-    for name, model in models:
-        text, tok_per_sec, vram_mb = generate_with_metrics(
-            model, args.prompt, args.tokens, args.temperature, args.top_k, device
-        )
-        _print_result(name, text, tok_per_sec, vram_mb)
-        model.cpu()
-        if device == "cuda":
-            torch.cuda.empty_cache()
+    run_cortex(args, device)
+    run_gpt2(args, device)
 
 
 if __name__ == "__main__":
