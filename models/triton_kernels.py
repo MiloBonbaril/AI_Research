@@ -3,9 +3,15 @@ Noyau Triton pour le matmul ternaire de BitLinear.
 
 Le chemin PyTorch (BitLinearInference) dépaquète les poids vers un tenseur dense
 fp32/bf16, puis appelle F.linear. Ce noyau fait les deux dans les registres :
-  1. Dépaquetage 2 bits → {-1, 0, +1} inline (pas d'allocation de poids dense)
-  2. Quantification int8 de l'activation depuis scale_x pré-calculée
-  3. Accumulation float32, déquantification à la sortie
+  1. Dépaquetage 2 bits → {-1, 0, +1} inline (pas d'allocation de poids dense) ;
+     chaque octet packé est chargé UNE fois puis éclaté via tl.interleave
+     (pas de gather redondant 4×)
+  2. Quantification int8 de l'activation depuis scale_x (absmax par ligne,
+     calculé par un petit noyau fusionné — pas de chaîne cast/abs/amax PyTorch)
+  3. Accumulation float32, déquantification et store directement dans le dtype
+     de sortie (pas de buffer fp32 intermédiaire ni de cast séparé)
+
+gamma est passé en float Python : aucun .item() (= sync GPU→CPU) sur le chemin chaud.
 
 Appelé par training.bitlinear_deploy.BitLinearInference quand CUDA est disponible.
 Fallback PyTorch transparent sur CPU/MPS.
@@ -19,15 +25,29 @@ import triton.language as tl
 
 
 # ---------------------------------------------------------------------------
-# Noyau Triton
+# Noyaux Triton
 # ---------------------------------------------------------------------------
+
+@triton.jit
+def _rowwise_absmax_kernel(x_ptr, out_ptr, M, K, stride_xm, stride_xk,
+                           BLOCK_K: tl.constexpr):
+    """absmax fp32 par ligne, clampé à 1e-5 — un programme par ligne."""
+    row = tl.program_id(0)
+    acc = 0.0
+    for k_idx in range(0, tl.cdiv(K, BLOCK_K)):
+        offs_k = k_idx * BLOCK_K + tl.arange(0, BLOCK_K)
+        x = tl.load(x_ptr + row * stride_xm + offs_k * stride_xk,
+                    mask=offs_k < K, other=0.0).to(tl.float32)
+        acc = tl.maximum(acc, tl.max(tl.abs(x), axis=0))
+    tl.store(out_ptr + row, tl.maximum(acc, 1e-5))
+
 
 @triton.jit
 def _ternary_mm_kernel(
     x_ptr,          # (M, K) — activations en précision de calcul
     w_ptr,          # (N * K // 4,) uint8 — poids packés 2 bits, layout row-major (N, K)
     scale_x_ptr,    # (M,) float32 — absmax par ligne (pré-calculé)
-    y_ptr,          # (M, N) float32 — sortie
+    y_ptr,          # (M, N) — sortie, dtype de x
     gamma,          # float32 — absmean des poids
     M, N, K,
     stride_xm, stride_xk,
@@ -47,6 +67,7 @@ def _ternary_mm_kernel(
     scale_x = tl.load(scale_x_ptr + offs_m, mask=mask_m, other=1.0)  # (BLOCK_M,)
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    Kb = K // 4  # octets par ligne de poids (K est multiple de 4, cf. wrapper)
 
     for k_idx in range(0, tl.cdiv(K, BLOCK_K)):
         offs_k = k_idx * BLOCK_K + tl.arange(0, BLOCK_K)
@@ -61,18 +82,21 @@ def _ternary_mm_kernel(
         x_q = x_tile * (127.0 / scale_x[:, None])
         x_q = tl.minimum(tl.maximum(x_q, -128.0), 127.0)
 
-        # --- w tile (BLOCK_N, BLOCK_K) : dépackager 2 bits → {-1, 0, +1} ---
-        # w[n, k] est à la position plate n*K + k dans le buffer packé
-        flat    = offs_n[:, None] * K + offs_k[None, :]    # (BLOCK_N, BLOCK_K)
-        byte_i  = flat // 4
-        bit_off = (flat % 4) * 2                           # ∈ {0, 2, 4, 6}
-
+        # --- w tile (BLOCK_N, BLOCK_K) : octets chargés une fois, puis éclatés ---
+        # octet (n, kb) contient les poids k = 4·kb .. 4·kb+3 (2 bits chacun)
+        offs_kb = k_idx * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
         packed = tl.load(
-            w_ptr + byte_i,
-            mask=mask_n[:, None] & mask_k[None, :], other=1,  # code 1 → valeur 0
+            w_ptr + offs_n[:, None] * Kb + offs_kb[None, :],
+            mask=mask_n[:, None] & (offs_kb[None, :] < Kb),
+            other=0b01010101,                              # code 1 → valeur 0
         ).to(tl.int32)
-        codes = (packed >> bit_off) & 0x3                  # {0, 1, 2}
-        w_q   = codes.to(tl.float32) - 1.0                # {-1, 0, +1}
+        c0 = packed & 0x3
+        c1 = (packed >> 2) & 0x3
+        c2 = (packed >> 4) & 0x3
+        c3 = (packed >> 6) & 0x3
+        # interleave imbriqué → ordre k croissant : c0, c1, c2, c3, c0, ...
+        codes = tl.interleave(tl.interleave(c0, c2), tl.interleave(c1, c3))
+        w_q = codes.to(tl.float32) - 1.0                   # {-1, 0, +1}
 
         # fp16 pour les tensor cores Blackwell
         acc = tl.dot(
@@ -80,11 +104,11 @@ def _ternary_mm_kernel(
             acc=acc, out_dtype=tl.float32,
         )
 
-    # Déquantifier et sauvegarder
+    # Déquantifier et sauvegarder directement dans le dtype de sortie
     y = acc * (gamma / 127.0) * scale_x[:, None]
     tl.store(
         y_ptr + offs_m[:, None] * N + offs_n[None, :],
-        y,
+        y.to(y_ptr.dtype.element_ty),
         mask=mask_m[:, None] & mask_n[None, :],
     )
 
@@ -93,16 +117,17 @@ def _ternary_mm_kernel(
 # Wrapper Python
 # ---------------------------------------------------------------------------
 
-# Tailles de blocs — validées sur RTX 5070 Ti pour K ∈ {768, 3072}
-_BLOCK_M = 16
-_BLOCK_N = 32
+# Tailles de blocs — validées sur RTX 5070 Ti pour M ∈ [1, 512], K ∈ {768, 3072}
+_BLOCK_M = 32
+_BLOCK_N = 64
 _BLOCK_K = 64
+_NUM_WARPS = 4
 
 
 def ternary_matmul(
     x: torch.Tensor,
     w_packed: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma: float,
     out_features: int,
     in_features: int,
 ) -> torch.Tensor:
@@ -111,28 +136,40 @@ def ternary_matmul(
 
     x          : (..., in_features) — déjà passé par SubLN
     w_packed   : (out_features * in_features // 4,) uint8
-    gamma      : scalar — absmean des poids
+    gamma      : float Python — absmean des poids (pas un tenseur : évite un
+                 .item() qui synchroniserait le GPU à chaque appel)
     Retour     : (..., out_features), même dtype que x
     """
+    assert in_features % 4 == 0, "in_features doit être multiple de 4 (packing 2 bits)"
+    gamma = float(gamma)  # accepte aussi un tenseur scalaire (sync unique, hors chemin chaud si float)
+
     orig_shape = x.shape
-    x_flat = x.reshape(-1, in_features).contiguous()
+    x_flat = x.reshape(-1, in_features)
+    if not x_flat.is_contiguous():
+        x_flat = x_flat.contiguous()
     M = x_flat.shape[0]
 
-    # Absmax par ligne — one-liner PyTorch, fusion possible plus tard si bottleneck
-    scale_x = x_flat.float().abs().amax(dim=-1).clamp(min=1e-5)
+    # Absmax par ligne — un seul noyau (vs chaîne cast/abs/amax/clamp PyTorch)
+    scale_x = torch.empty(M, device=x.device, dtype=torch.float32)
+    _rowwise_absmax_kernel[(M,)](
+        x_flat, scale_x, M, in_features,
+        x_flat.stride(0), x_flat.stride(1),
+        BLOCK_K=min(triton.next_power_of_2(in_features), 4096),
+    )
 
-    y = torch.empty(M, out_features, device=x.device, dtype=torch.float32)
+    y = torch.empty(M, out_features, device=x.device, dtype=x.dtype)
 
     grid = (triton.cdiv(M, _BLOCK_M), triton.cdiv(out_features, _BLOCK_N))
     _ternary_mm_kernel[grid](
         x_flat, w_packed, scale_x, y,
-        gamma.float().item(),
+        gamma,
         M, out_features, in_features,
         x_flat.stride(0), x_flat.stride(1),
         BLOCK_M=_BLOCK_M, BLOCK_N=_BLOCK_N, BLOCK_K=_BLOCK_K,
+        num_warps=_NUM_WARPS,
     )
 
-    return y.to(x.dtype).reshape(*orig_shape[:-1], out_features)
+    return y.reshape(*orig_shape[:-1], out_features)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +177,6 @@ def ternary_matmul(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import math
     import time
     from training.bitlinear_deploy import pack_ternary, unpack_ternary
 
@@ -153,7 +189,7 @@ if __name__ == "__main__":
     # Fabrique des poids ternaires et les packe
     W_q = torch.randint(-1, 2, (OUT, IN), device=device).float()
     packed = pack_ternary(W_q.cpu()).to(device)
-    gamma  = torch.tensor(0.5, device=device)
+    gamma  = 0.5
 
     x = torch.randn(8, 64, IN, device=device, dtype=dtype)  # batch=8, T=64
 
@@ -170,7 +206,7 @@ if __name__ == "__main__":
     assert max_err < 1.0, f"erreur max trop grande : {max_err:.4f}"
     print(f"Vérification OK  (erreur max = {max_err:.4f}, attendu < 1.0 — rounding int8)")
 
-    # --- Benchmark : noyau vs référence PyTorch ---
+    # --- Benchmark : noyau vs référence PyTorch vs cuBLAS dense ---
     WARMUP, REPS = 20, 200
 
     def bench(fn):
@@ -192,7 +228,12 @@ if __name__ == "__main__":
     def tri_fn():
         return ternary_matmul(x, packed, gamma, OUT, IN)
 
+    def cublas_fn():
+        return x @ W_dense.T
+
     t_ref = bench(ref_fn)
     t_tri = bench(tri_fn)
-    print(f"PyTorch  : {t_ref:.3f} ms")
-    print(f"Triton   : {t_tri:.3f} ms  ({t_ref/t_tri:.1f}x)")
+    t_cub = bench(cublas_fn)
+    print(f"PyTorch (dépack dense) : {t_ref:.3f} ms")
+    print(f"Triton                 : {t_tri:.3f} ms  ({t_ref/t_tri:.1f}x)")
+    print(f"cuBLAS bf16 (référence vitesse) : {t_cub:.3f} ms")

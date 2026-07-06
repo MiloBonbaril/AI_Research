@@ -42,6 +42,10 @@ def generate_with_metrics(
 
     model.to(device).eval()
 
+    # Échauffement : JIT Triton, autotune cuBLAS, allocations — hors mesure
+    with torch.inference_mode():
+        model.generate(idx, max_new_tokens=5, temperature=temperature, top_k=top_k)
+
     if device == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)

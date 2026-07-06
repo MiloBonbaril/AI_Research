@@ -86,6 +86,9 @@ class BitLinearInference(nn.Module):
         self.out_features, self.in_features = W.shape
         self.register_buffer("packed", pack_ternary(W_q))
         self.register_buffer("gamma", gamma.clone())
+        # float Python extrait UNE fois ici : le passer au kernel évite un
+        # .item() (sync GPU→CPU) à chaque forward
+        self.gamma_f = float(gamma)
         self.norm = src.norm                              # réutilise la SubLN
         self.bias = src.bias if src.bias is not None else None
 
@@ -93,7 +96,7 @@ class BitLinearInference(nn.Module):
         x = self.norm(x)
         if x.is_cuda:
             from models.triton_kernels import ternary_matmul
-            return ternary_matmul(x, self.packed, self.gamma, self.out_features, self.in_features)
+            return ternary_matmul(x, self.packed, self.gamma_f, self.out_features, self.in_features)
         # CPU / MPS fallback : dépaquetage dense + F.linear
         W = unpack_ternary(self.packed, self.out_features, self.in_features, dtype=x.dtype)
         scale_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
