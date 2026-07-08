@@ -134,9 +134,12 @@ class CausalSelfAttention(nn.Module):
 
 class FeedForward(nn.Module):
     """
-    FFN à deux couches avec GELU.
+    FFN à deux couches avec activation ReLU² (Squared ReLU).
 
     Expansion 4× standard : n_embd → 4·n_embd → n_embd.
+    ReLU² (`max(0, z)²`) induit une sparsité d'activation émergente (~90-95%
+    des neurones cachés à 0 par token une fois entraîné) sans prédicteur ni
+    régularisation additionnelle — cf. models/cortex.md §5.
     """
 
     def __init__(self, config: CortexConfig):
@@ -145,8 +148,7 @@ class FeedForward(nn.Module):
         self.c_proj = BitLinear(4 * config.n_embd, config.n_embd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # ponytail: GELU approx tanh — identique à l'implémentation OpenAI originale
-        x = F.gelu(self.c_fc(x), approximate="tanh")
+        x = F.relu(self.c_fc(x)).square()
         return self.c_proj(x)
 
 
@@ -282,6 +284,15 @@ if __name__ == "__main__":
         W_q = (bl.weight / (gamma + 1e-8)).clamp(-1, 1).round()
         assert set(W_q.unique().tolist()).issubset({-1.0, 0.0, 1.0}), "poids non ternaires"
     print("BitLinear OK")
+
+    # Vérification FeedForward : ReLU² produit des zéros exacts (sparsité)
+    ff = FeedForward(CortexConfig(n_layer=2))
+    x = torch.randn(2, 8, 768)
+    y = ff(x)
+    assert y.shape == (2, 8, 768), f"forme FFN inattendue : {y.shape}"
+    hidden_sparsity = (F.relu(ff.c_fc(x)).square() == 0).float().mean().item()
+    assert hidden_sparsity > 0.0, "ReLU² ne produit aucune sparsité"
+    print(f"FeedForward OK — sparsité activations cachées ≈ {hidden_sparsity:.1%}")
 
     # Vérification Cortex : forme des logits
     cfg = CortexConfig(n_layer=2, context_len=16)
