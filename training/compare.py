@@ -311,9 +311,10 @@ def main():
 
     from models.gpt2 import GPT2, GPT2Config
     from models.cortex import Cortex, CortexConfig
+    from models.deepseek import DeepSeek, DeepSeekConfig
 
-    model_a = Cortex(CortexConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
-    model_a_name = "Cortex"
+    model_a = DeepSeek(DeepSeekConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
+    model_a_name = "DeepSeek"
 
     model_b = GPT2(GPT2Config(vocab_size=50257, dropout=0.1, context_len=args.context_len))
     model_b_name = "GPT2"

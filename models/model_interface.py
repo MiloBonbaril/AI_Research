@@ -85,8 +85,8 @@ class LanguageModel(ABC, nn.Module):
         """
         logits = self.forward(idx)  # (B, T, V)
         return F.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            targets.view(-1),
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
         )
 
     @torch.no_grad()
