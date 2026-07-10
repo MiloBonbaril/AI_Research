@@ -1,28 +1,31 @@
 """
-Script d'entraînement comparatif — deux modèles, même budget compute.
+Script d'entraînement comparatif — un seul modèle par invocation, même protocole compute.
 
-Entraîne deux LanguageModel sur wikitext-103 puis compare leurs loss de validation.
+Entraîne UN LanguageModel (choisi via --model) sur wikitext-103, l'évalue sur le split
+validation, sauvegarde son état final, et logge tout dans wandb. La comparaison entre
+modèles ne se fait PLUS via un tableau imprimé en fin de script (ça exigeait les deux
+résultats en mémoire dans le même process) : elle se fait via wandb, en lançant le script
+une fois par modèle avec le MÊME --group — les runs partagent alors le même groupe et
+apparaissent superposés dans le projet wandb, courbes comparables sur l'axe tokens_seen.
 
 Usage :
-    python compare.py --max-steps 2000                   # N steps par modèle (recommandé)
-    python compare.py --duration 600                     # 10 min par modèle (wall-clock)
-    python compare.py --batch-size 4 --grad-accum 8      # simule batch=32
+    python -m training.compare --model gpt2   --group run1 --max-steps 2000
+    python -m training.compare --model oneira --group run1 --max-steps 2000
+    python -m training.compare --model cortex --duration 600      # --group omis → timestamp auto
+    python -m training.compare --model oneira --no-save           # smoke test, pas de checkpoint
 
-Le script :
-  1. Tokenise wikitext-103 une seule fois (cache sur disque)
-  2. Entraîne modèle A
-  3. Entraîne modèle B
-  4. Évalue les deux sur le split validation
-  5. Affiche le résumé comparatif
+Modèles disponibles (--model) : gpt2, cortex, deepseek, memora, oneira.
 
-Axe de comparaison : tokens_seen (= steps × batch × grad_accum × context_len).
-  Avec --max-steps les deux modèles voient exactement le même nombre de tokens,
-  indépendamment de leur vitesse wall-clock. C'est l'axe X dans W&B.
-  Budget FLOPs : Memora ≈ 546 GFLOPs/step vs GPT-2 ≈ 583 GFLOPs/step (T=2048),
-  soit un avantage théorique Memora de ~6 %. Le wall-clock Memora est ~1.57x plus
-  lent (RTX 5070 Ti, B=2, T=2048) — flex_attention + GLA Triton moins efficaces
-  que SDPA classique. torch.compile ne réduit pas l'écart (flex_attention et GLA
-  sont déjà JIT-compilés au niveau module).
+Axe de comparaison : tokens_seen (= steps × batch × grad_accum × context_len). Avec
+--max-steps le modèle voit un nombre de tokens fixé indépendamment de sa vitesse wall-clock —
+lancer deux modèles avec le même --max-steps et le même --group les rend comparables à
+iso-compute dans wandb.
+
+Oneira est entraîné ici via son contrat LanguageModel standard (backbone Memora, L_main +
+z-loss, cf. Oneira.loss) — PAS via son compute_losses() 3-branches (L_head/L_sim, cf.
+models/oneira.py). Ce script compare des BACKBONES à budget égal ; brancher L_sim demande un
+training loop dédié (paires (i,k), warmup de lambda_sim, chunks) hors de la portée de ce
+protocole générique.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import argparse
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
@@ -39,6 +42,24 @@ from torch.utils.data import DataLoader
 
 from training.dataset import WikiTextDataset, evaluate, _amp
 from models.model_interface import LanguageModel
+from models.gpt2 import GPT2, GPT2Config
+from models.cortex import Cortex, CortexConfig
+from models.deepseek import DeepSeek, DeepSeekConfig
+from models.memora import Memora, MemoraConfig
+from models.oneira import Oneira, OneiraConfig
+
+
+# ---------------------------------------------------------------------------
+# Registre des modèles — un seul entraîné par invocation (cf. --model)
+# ---------------------------------------------------------------------------
+
+MODEL_REGISTRY = {
+    "gpt2":     lambda args: GPT2(GPT2Config(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+    "cortex":   lambda args: Cortex(CortexConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+    "deepseek": lambda args: DeepSeek(DeepSeekConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+    "memora":   lambda args: Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+    "oneira":   lambda args: Oneira(OneiraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +99,11 @@ def train_model(
 
     Utilise AdamW avec cosine annealing. Le timer / compteur de steps est
     vérifié après chaque step (pas chaque micro-batch).
+
+    NB: si use_compile, `model` est recompilé dans une variable LOCALE (torch.compile ne
+    clone pas les paramètres) — l'objet passé par l'appelant reste la référence non-compilée
+    et se retrouve entraîné (mêmes tenseurs Parameter) une fois cette fonction retournée ;
+    c'est lui que main() sauvegarde ensuite.
     """
     assert (duration_seconds is None) != (max_steps is None), \
         "fournir exactement un de duration_seconds ou max_steps"
@@ -210,7 +236,9 @@ def train_model(
 
 
 def init_wandb(project: str, model_name: str, model: LanguageModel, args, device: str, group: str):
-    """Démarre un run wandb par modèle, groupés → courbes superposées dans le projet."""
+    """Démarre un run wandb pour ce modèle. `group` relie plusieurs invocations du script
+    (une par modèle) en un seul groupe comparable — c'est LE mécanisme de comparaison
+    maintenant qu'une seule invocation n'entraîne qu'un modèle (cf. docstring module)."""
     import wandb
     run = wandb.init(
         project=project,
@@ -232,44 +260,34 @@ def init_wandb(project: str, model_name: str, model: LanguageModel, args, device
             "comparison_axis": "tokens_seen",
         },
     )
-    # tokens_seen comme axe X → courbes Memora/GPT-2 comparables à iso-compute
+    # tokens_seen comme axe X → courbes comparables entre modèles à iso-compute
     run.define_metric("tokens_seen")
     run.define_metric("*", step_metric="tokens_seen")
     return run
 
 
 # ---------------------------------------------------------------------------
-# Résumé comparatif
+# Checkpoint (sauvegarde finale, pas de reprise — cf. train.py pour l'entraînement resumable)
 # ---------------------------------------------------------------------------
 
-def print_comparison(a: TrainResult, b: TrainResult):
-    """Affiche un tableau comparatif des deux runs."""
-    print("\n" + "=" * 60)
-    print("  RÉSUMÉ COMPARATIF")
-    print("=" * 60)
-    header = f"  {'Métrique':<25} {'│ ' + a.model_name:<20} {'│ ' + b.model_name:<20}"
-    print(header)
-    print("  " + "─" * 56)
-
-    rows = [
-        ("Steps",          f"{a.steps:,}",              f"{b.steps:,}"),
-        ("Tokens vus",     f"{a.tokens_seen:,}",        f"{b.tokens_seen:,}"),
-        ("Temps mural (s)", f"{a.wall_time:.1f}",       f"{b.wall_time:.1f}"),
-        ("Train loss",     f"{a.final_train_loss:.4f}", f"{b.final_train_loss:.4f}"),
-        ("Val loss",       f"{a.val_loss:.4f}",         f"{b.val_loss:.4f}"),
-        ("Val perplexity", f"{a.val_perplexity:.2f}",   f"{b.val_perplexity:.2f}"),
-    ]
-
-    for label, va, vb in rows:
-        print(f"  {label:<25} │ {va:<18} │ {vb:<18}")
-
-    if a.val_loss < b.val_loss:
-        winner, delta = a.model_name, b.val_loss - a.val_loss
-    else:
-        winner, delta = b.model_name, a.val_loss - b.val_loss
-    print("  " + "─" * 56)
-    print(f"  🏆 Gagnant : {winner} (Δ val_loss = {delta:.4f})")
-    print("=" * 60)
+def save_checkpoint(ckpt_dir: str, group: str, model_name: str,
+                     model: LanguageModel, result: TrainResult) -> Path:
+    """Écriture atomique (tmp → rename, cf. training/train.py._save) de l'état final du
+    modèle entraîné. Pas d'optimiseur/RNG ici : ce n'est pas un checkpoint resumable, juste
+    le modèle testé + sa config + son résultat, pour réutilisation (génération, reprise
+    manuelle, inspection) après une comparaison."""
+    path = Path(ckpt_dir)
+    path.mkdir(exist_ok=True)
+    out_path = path / f"{group}_{model_name}.pt"
+    tmp = out_path.with_suffix(".tmp")
+    torch.save({
+        "model_name": model_name,
+        "model": model.state_dict(),
+        "config": model.config,
+        "result": asdict(result),
+    }, tmp)
+    tmp.rename(out_path)
+    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +295,17 @@ def print_comparison(a: TrainResult, b: TrainResult):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Entraînement comparatif de deux modèles")
-    parser.add_argument("--duration", type=int, default=300, help="Durée par modèle en secondes (défaut: 300 = 5min)")
+    parser = argparse.ArgumentParser(description="Entraînement comparatif (un modèle par invocation)")
+    parser.add_argument("--model", type=str, default="oneira", choices=sorted(MODEL_REGISTRY),
+                         help="Modèle à entraîner cette invocation (défaut: oneira)")
+    parser.add_argument("--group", type=str, default=None,
+                         help="Groupe wandb partagé entre plusieurs invocations à comparer "
+                              "(défaut: timestamp auto — un groupe à lui seul)")
+    parser.add_argument("--duration", type=int, default=300, help="Durée en secondes (défaut: 300 = 5min)")
     parser.add_argument("--max-steps", type=int, default=None, help="Entraîner sur N steps au lieu d'une durée (override --duration)")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--grad-accum", type=int, default=16)
     parser.add_argument("--lr", type=float, default=6e-4)
-    parser.add_argument("--lr-memora", type=float, default=6e-4, help="LR Memora (axe 11)")
     parser.add_argument("--context-len", type=int, default=2048)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--log-interval", type=int, default=50)
@@ -291,8 +313,11 @@ def main():
     parser.add_argument("--wandb-project", type=str, default="memora-vs-gpt2")
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--grad-checkpoint", action="store_true")
+    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    parser.add_argument("--no-save", action="store_true", help="Ne pas sauvegarder le modèle entraîné")
     args = parser.parse_args()
     use_wandb = not args.no_wandb
+    group = args.group or time.strftime("%Y%m%d_%H%M%S")
 
     if args.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -309,63 +334,39 @@ def main():
     val_loader   = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                               num_workers=2, pin_memory=True)
 
-    from models.gpt2 import GPT2, GPT2Config
-    from models.cortex import Cortex, CortexConfig
-    from models.deepseek import DeepSeek, DeepSeekConfig
+    model = MODEL_REGISTRY[args.model](args)
+    model_name = type(model).__name__
 
-    model_a = DeepSeek(DeepSeekConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len))
-    model_a_name = "DeepSeek"
+    duration = None if args.max_steps is not None else args.duration
 
-    model_b = GPT2(GPT2Config(vocab_size=50257, dropout=0.1, context_len=args.context_len))
-    model_b_name = "GPT2"
-
-    duration  = None if args.max_steps is not None else args.duration
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-
-    run_a = init_wandb(args.wandb_project, model_a_name, model_a, args, device, timestamp) if use_wandb else None
-    result_a = train_model(
-        model_a, model_a_name, train_loader, val_loader,
-        duration_seconds=duration, lr=args.lr_memora,
-        grad_accum_steps=args.grad_accum, device=device,
-        log_interval=args.log_interval, max_steps=args.max_steps,
-        wandb_run=run_a, use_compile=not args.no_compile,
-    )
-    if run_a is not None:
-        run_a.finish()
-
-    model_a.cpu()
-    torch.cuda.empty_cache() if device == "cuda" else None
-
-    run_b = init_wandb(args.wandb_project, model_b_name, model_b, args, device, timestamp) if use_wandb else None
-    result_b = train_model(
-        model_b, model_b_name, train_loader, val_loader,
+    run = init_wandb(args.wandb_project, model_name, model, args, device, group) if use_wandb else None
+    result = train_model(
+        model, model_name, train_loader, val_loader,
         duration_seconds=duration, lr=args.lr,
         grad_accum_steps=args.grad_accum, device=device,
         log_interval=args.log_interval, max_steps=args.max_steps,
-        wandb_run=run_b, use_compile=not args.no_compile,
+        wandb_run=run, use_compile=not args.no_compile,
     )
-    if run_b is not None:
-        run_b.finish()
+    if run is not None:
+        run.finish()
 
-    print_comparison(result_a, result_b)
+    print(f"  Steps          : {result.steps:,}")
+    print(f"  Tokens vus     : {result.tokens_seen:,}")
+    print(f"  Val loss       : {result.val_loss:.4f}")
+    print(f"  Val perplexity : {result.val_perplexity:.2f}")
+
+    if not args.no_save:
+        ckpt_path = save_checkpoint(args.checkpoint_dir, group, model_name, model, result)
+        print(f"  Checkpoint     : {ckpt_path}")
 
     results_path = Path("results")
     results_path.mkdir(exist_ok=True)
-    for r in (result_a, result_b):
-        out = {
-            "model": r.model_name,
-            "steps": r.steps,
-            "tokens_seen": r.tokens_seen,
-            "wall_time": r.wall_time,
-            "final_train_loss": r.final_train_loss,
-            "val_loss": r.val_loss,
-            "val_perplexity": r.val_perplexity,
-            "loss_history": r.loss_history,
-        }
-        fname = results_path / f"{timestamp}_{r.model_name.replace(' ', '_')}.json"
-        with open(fname, "w") as f:
-            json.dump(out, f, indent=2)
-    print(f"\nRésultats sauvés dans {results_path}/")
+    out = asdict(result)
+    out["params_M"] = round(model.num_params() / 1e6, 1)
+    fname = results_path / f"{group}_{model_name}.json"
+    with open(fname, "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"\nRésultats sauvés dans {fname}")
 
 
 if __name__ == "__main__":

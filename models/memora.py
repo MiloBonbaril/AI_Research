@@ -469,7 +469,7 @@ class Memora(LanguageModel):
             self._bm_cache[key] = masks
         return masks
 
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+    def forward(self, idx: torch.Tensor, return_hidden: bool = False) -> torch.Tensor:
         B, T = idx.shape
         x = self.tok_embd(idx)
         cos, sin = self._rope(T, x.device, x.dtype)
@@ -487,6 +487,10 @@ class Memora(LanguageModel):
         if self.config.logit_cap is not None:
             cap = self.config.logit_cap
             logits = cap * torch.tanh(logits / cap)
+        # return_hidden : hidden states pré-lm_head (B,T,d), utilisés par models/oneira.py
+        # pour poser une tête de simulation sur ce backbone sans dupliquer sa passe avant.
+        if return_hidden:
+            return logits, x
         return logits
 
     def loss(self, idx: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
