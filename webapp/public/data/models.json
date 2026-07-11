@@ -257,107 +257,102 @@
         "context_len": 1024,
         "n_layer": 12,
         "n_head": 12,
-        "n_embd": 768,
-        "recall_layers": [
-          3,
-          7,
-          11
-        ]
+        "n_embd": 768
       },
       "total_params": 123653376,
       "blocks": [
         {
           "index": 0,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 1,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 2,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 3,
-          "kind": "full-attention",
-          "mixer_class": "CausalSelfAttention",
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 4,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 5,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 6,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 7,
-          "kind": "full-attention",
-          "mixer_class": "CausalSelfAttention",
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 8,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 9,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 10,
-          "kind": "linear-attention",
-          "mixer_class": "LinearAttention",
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}
         },
         {
           "index": 11,
-          "kind": "full-attention",
-          "mixer_class": "CausalSelfAttention",
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
           "mlp_class": "FeedForward",
           "params": 7087872,
           "detail": {}

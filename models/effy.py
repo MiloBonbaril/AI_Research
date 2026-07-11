@@ -1,14 +1,14 @@
 """
-Effy — hybride attention linéaire causale / attention pleine "de rappel".
+Effy — hybride attention pleine / attention linéaire causale "d'économie".
 
 Reprend l'architecture de models/gpt2.py à l'identique (pre-norm, GELU-tanh,
 weight tying, embeddings positionnels appris, biais partout, FFN 4×) à une
-seule différence : la plupart des blocs utilisent une attention LINÉAIRE
-causale (noyau φ(q)·φ(k), coût O(T), état de taille fixe) plutôt que
-l'attention pleine O(T²) de GPT-2. Un bloc sur 4 ("couche de rappel") garde
-l'attention pleine pour le recall exact que le noyau linéaire n'offre pas —
-ratio 1 couche pleine pour 3 couches linéaires (même principe que le mélange
-GDN/SWA de Cortex, cf. models/cortex.md).
+seule différence : la plupart des blocs gardent l'attention PLEINE O(T²) de
+GPT-2, et un bloc sur 4 bascule sur une attention LINÉAIRE causale (noyau
+φ(q)·φ(k), coût O(T), état de taille fixe) pour amortir le coût quadratique —
+ratio 3 couches pleines pour 1 couche linéaire (même principe que le mélange
+GDN/SWA de Cortex, cf. models/cortex.md, mais inversé : ici la majorité reste
+l'attention exacte).
 
 Les deux types de couches partagent exactement les mêmes formes de
 projections (c_attn: n_embd → 3·n_embd, c_proj: n_embd → n_embd) : seul le
@@ -38,12 +38,12 @@ class EffyConfig(BaseModelConfig):
     Hyperparamètres Effy Small (~124M).
 
     Hérite de BaseModelConfig (mêmes valeurs par défaut que GPT-2 Small :
-    50257/1024/12/12/768). `recall_layers` fixe les indices de blocs qui
-    gardent l'attention pleine ; tous les autres blocs sont en attention
-    linéaire. Défaut = 3 couches de rappel sur 12 → ratio 1 pleine pour 3
-    linéaires, réparties tous les 4 blocs.
+    50257/1024/12/12/768). `linear_layers` fixe les indices de blocs qui
+    basculent en attention linéaire ; tous les autres blocs gardent
+    l'attention pleine. Défaut = 3 couches linéaires sur 12 → ratio 3 pleines
+    pour 1 linéaire, réparties tous les 4 blocs.
     """
-    recall_layers: tuple = (3, 7, 11)
+    linear_layers: tuple = (3, 7, 11)
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +54,8 @@ class CausalSelfAttention(nn.Module):
     """
     Multi-head causal self-attention pleine — identique à gpt2.CausalSelfAttention.
 
-    Réservée aux couches de rappel (`recall_layers`) : recall exact que le
-    noyau linéaire de LinearAttention ne peut pas offrir.
+    Type par défaut (3 blocs sur 4) : recall exact que le noyau linéaire de
+    LinearAttention ne peut pas offrir, sauf sur les `linear_layers`.
     """
 
     def __init__(self, config: EffyConfig):
@@ -198,8 +198,8 @@ class TransformerBlock(nn.Module):
     """
     Un bloc Transformer pre-norm — structure identique à gpt2.TransformerBlock.
 
-    `full_attn=True` (couche de rappel) → CausalSelfAttention (pleine).
-    `full_attn=False` (défaut, 3 couches sur 4) → LinearAttention.
+    `full_attn=True` (défaut, 3 couches sur 4) → CausalSelfAttention (pleine).
+    `full_attn=False` (`linear_layers`) → LinearAttention.
     """
 
     def __init__(self, config: EffyConfig, full_attn: bool):
@@ -224,10 +224,10 @@ class Effy(LanguageModel):
     """
     Effy Small (~124M paramètres).
 
-    Architecture : identique à GPT-2 Small, sauf que 3 blocs sur 4 utilisent
-    une attention linéaire causale (état de taille fixe) au lieu de
-    l'attention pleine softmax ; les blocs `recall_layers` gardent
-    l'attention pleine pour le recall exact.
+    Architecture : identique à GPT-2 Small — 3 blocs sur 4 gardent l'attention
+    pleine softmax exacte ; les blocs `linear_layers` basculent sur une
+    attention linéaire causale (état de taille fixe) pour amortir le coût
+    quadratique.
     """
 
     def __init__(self, config: EffyConfig | None = None):
@@ -242,9 +242,9 @@ class Effy(LanguageModel):
         self.drop = nn.Dropout(c.dropout)
 
         # -- Transformer ----------------------------------------------------
-        recall = set(c.recall_layers)
+        linear = set(c.linear_layers)
         self.blocks = nn.ModuleList([
-            TransformerBlock(c, full_attn=(i in recall)) for i in range(c.n_layer)
+            TransformerBlock(c, full_attn=(i not in linear)) for i in range(c.n_layer)
         ])
 
         # -- Sortie ---------------------------------------------------------
@@ -263,7 +263,7 @@ class Effy(LanguageModel):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * c.n_layer))
 
         print(f"Effy Small initialisé — {self.num_params()/1e6:.1f}M paramètres "
-              f"({c.n_layer} couches, rappel={sorted(recall)})")
+              f"({c.n_layer} couches, linéaires={sorted(linear)})")
 
     @staticmethod
     def _init_weights(module: nn.Module):
@@ -308,7 +308,7 @@ class Effy(LanguageModel):
 
     @classmethod
     def from_pretrained(cls, model_name: str) -> "Effy":
-        # Architecture hybride nouvelle (attention linéaire + rappel) : aucun
+        # Architecture hybride nouvelle (attention pleine + linéaire) : aucun
         # poids pré-entraîné HuggingFace ne correspond à ce mélange de couches.
         raise NotImplementedError(
             "Effy est une architecture hybride nouvelle, sans checkpoint HuggingFace. "
@@ -321,7 +321,7 @@ if __name__ == "__main__":
 
     # 1. LinearAttention chunkée == forme naïve O(T²) (référence du noyau causal linéaire)
     cfg = EffyConfig(vocab_size=64, n_embd=32, n_head=4, n_layer=4, context_len=64,
-                      recall_layers=(1,))
+                      linear_layers=(1,))
     la = LinearAttention(cfg, chunk=8).eval()
     x = torch.randn(2, 23, cfg.n_embd)  # T non multiple de chunk → teste le padding
     with torch.no_grad():
@@ -344,9 +344,9 @@ if __name__ == "__main__":
     assert err < 1e-4, f"LinearAttention chunkée != naïve (err={err})"
     print(f"LinearAttention chunkée == naïve (err max = {err:.2e})")
 
-    # 2. forward + shapes + loss finie, config hybride 1 rappel / 3 linéaires
+    # 2. forward + shapes + loss finie, config hybride 3 pleines / 1 linéaire (6/8, 2/8)
     cfg2 = EffyConfig(vocab_size=64, n_embd=32, n_head=4, n_layer=8, context_len=64,
-                       recall_layers=(3, 7))
+                       linear_layers=(3, 7))
     model = Effy(cfg2)
     idx = torch.randint(0, cfg2.vocab_size, (2, 20))
     logits = model(idx)
