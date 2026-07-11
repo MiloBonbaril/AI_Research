@@ -1,0 +1,272 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1783763711.8267796,
+    "ast_hash": "cd6fc20495ac2a8668c17dfcd47db042",
+    "semantic_hash": "cd6fc20495ac2a8668c17dfcd47db042"
+  },
+  ".claude/settings.local.json": {
+    "mtime": 1782484672.269799,
+    "ast_hash": "c6a6662e5433e70887aa6f7e711460b9",
+    "semantic_hash": "c6a6662e5433e70887aa6f7e711460b9"
+  },
+  "main.py": {
+    "mtime": 1783279217.0601697,
+    "ast_hash": "4c6c28f0650205d53d539ed56b4f1a88",
+    "semantic_hash": "4c6c28f0650205d53d539ed56b4f1a88"
+  },
+  "models/__init__.py": {
+    "mtime": 1783070616.7805834,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "models/cortex.py": {
+    "mtime": 1783356411.7777572,
+    "ast_hash": "810dcba8d98333bea4b403704bce297b",
+    "semantic_hash": "810dcba8d98333bea4b403704bce297b"
+  },
+  "models/deepseek.py": {
+    "mtime": 1783531443.5002823,
+    "ast_hash": "f38743eba6a16a4eedb5d26474d4af51",
+    "semantic_hash": "f38743eba6a16a4eedb5d26474d4af51"
+  },
+  "models/effy.py": {
+    "mtime": 1783724445.283882,
+    "ast_hash": "c46094e96f526d1d55a3d097c88ff8f2",
+    "semantic_hash": "c46094e96f526d1d55a3d097c88ff8f2"
+  },
+  "models/gpt2.py": {
+    "mtime": 1783265305.5052335,
+    "ast_hash": "2dc9bd19e1b3d489fb805160050e7654",
+    "semantic_hash": "2dc9bd19e1b3d489fb805160050e7654"
+  },
+  "models/memora.py": {
+    "mtime": 1783719374.918828,
+    "ast_hash": "0744372caf0bc7ec7bc6eaacf60a49c4",
+    "semantic_hash": "0744372caf0bc7ec7bc6eaacf60a49c4"
+  },
+  "models/memora_gla.py": {
+    "mtime": 1783265305.5070128,
+    "ast_hash": "3958e51b598b4107a37d59608ba87350",
+    "semantic_hash": "3958e51b598b4107a37d59608ba87350"
+  },
+  "models/model_interface.py": {
+    "mtime": 1783531076.5752034,
+    "ast_hash": "ad64f40495bb44a86f5d5d21521fd50e",
+    "semantic_hash": "ad64f40495bb44a86f5d5d21521fd50e"
+  },
+  "models/oneira.py": {
+    "mtime": 1783719515.3582532,
+    "ast_hash": "84ab1e57bbbf7222d56a6ff551cdadba",
+    "semantic_hash": "84ab1e57bbbf7222d56a6ff551cdadba"
+  },
+  "models/triton_kernels.py": {
+    "mtime": 1783354562.4404936,
+    "ast_hash": "c4592d832cfdf73c062caecbff0457f7",
+    "semantic_hash": "c4592d832cfdf73c062caecbff0457f7"
+  },
+  "pyproject.toml": {
+    "mtime": 1783279704.9101076,
+    "ast_hash": "d5626c0fbf646d49623f460b7dd32e99",
+    "semantic_hash": "d5626c0fbf646d49623f460b7dd32e99"
+  },
+  "results/20260625_213847_GPT-2_Small.json": {
+    "mtime": 1782416327.8742619,
+    "ast_hash": "4437a5802b042366085c8cc86a02a061",
+    "semantic_hash": "4437a5802b042366085c8cc86a02a061"
+  },
+  "results/20260625_213847_GPT-2_Small_(bis).json": {
+    "mtime": 1782416327.874454,
+    "ast_hash": "83d95428216984d39359fbbb98a79a47",
+    "semantic_hash": "83d95428216984d39359fbbb98a79a47"
+  },
+  "results/20260625_220202_GPT-2_Small.json": {
+    "mtime": 1782417722.556262,
+    "ast_hash": "b2b70318538f776bf1b76449e471f51e",
+    "semantic_hash": "b2b70318538f776bf1b76449e471f51e"
+  },
+  "results/20260625_220202_GPT-2_Small_(bis).json": {
+    "mtime": 1782417722.5563662,
+    "ast_hash": "d9144811fc40efae27975830b54921aa",
+    "semantic_hash": "d9144811fc40efae27975830b54921aa"
+  },
+  "results/20260626_140818_GPT-2_Small.json": {
+    "mtime": 1782475698.9063053,
+    "ast_hash": "1af6eea3d2386def972a26ed043867f2",
+    "semantic_hash": "1af6eea3d2386def972a26ed043867f2"
+  },
+  "results/20260626_140818_Memora.json": {
+    "mtime": 1782475698.9062154,
+    "ast_hash": "cc03a527ecdd8b72bdacef4a9c8f64c8",
+    "semantic_hash": "cc03a527ecdd8b72bdacef4a9c8f64c8"
+  },
+  "results/20260626_144137_GPT-2_Small.json": {
+    "mtime": 1782477807.1428614,
+    "ast_hash": "6d193d007cd9c9027439516cf0b725cf",
+    "semantic_hash": "6d193d007cd9c9027439516cf0b725cf"
+  },
+  "results/20260626_144137_Memora.json": {
+    "mtime": 1782477807.1427472,
+    "ast_hash": "11dc4a793e8449a3b27834509548a7a0",
+    "semantic_hash": "11dc4a793e8449a3b27834509548a7a0"
+  },
+  "results/20260626_165610_GPT-2_Small.json": {
+    "mtime": 1782485900.4373968,
+    "ast_hash": "71775cfe4b1fdde1e2f01d6ef5469551",
+    "semantic_hash": "71775cfe4b1fdde1e2f01d6ef5469551"
+  },
+  "results/20260626_165610_Memora_Flash.json": {
+    "mtime": 1782485900.4372933,
+    "ast_hash": "c35d80674d8c4df14fdd281c0cf06d2d",
+    "semantic_hash": "c35d80674d8c4df14fdd281c0cf06d2d"
+  },
+  "results/20260626_193753_GPT-2_Small.json": {
+    "mtime": 1782495584.5541003,
+    "ast_hash": "f2c9df148a24dca8d563e729445bfecf",
+    "semantic_hash": "f2c9df148a24dca8d563e729445bfecf"
+  },
+  "results/20260626_193753_Memora.json": {
+    "mtime": 1782495584.5540066,
+    "ast_hash": "8eba8762028086f08c17b9afb0d99792",
+    "semantic_hash": "8eba8762028086f08c17b9afb0d99792"
+  },
+  "results/20260626_194518_GPT-2_Small.json": {
+    "mtime": 1782496028.5737367,
+    "ast_hash": "38d0246ba96c6c3e9de0c849af7f1505",
+    "semantic_hash": "38d0246ba96c6c3e9de0c849af7f1505"
+  },
+  "results/20260626_194518_Memora.json": {
+    "mtime": 1782496028.57364,
+    "ast_hash": "ceea966b7914d2365626a565cee80d2e",
+    "semantic_hash": "ceea966b7914d2365626a565cee80d2e"
+  },
+  "results/20260626_195020_GPT-2_Small.json": {
+    "mtime": 1782496313.6151059,
+    "ast_hash": "7add5dcec0c256c2bde3c4b8d0e63f8d",
+    "semantic_hash": "7add5dcec0c256c2bde3c4b8d0e63f8d"
+  },
+  "results/20260626_195020_Memora.json": {
+    "mtime": 1782496313.615011,
+    "ast_hash": "038fa905176015f3649e6ccba3233500",
+    "semantic_hash": "038fa905176015f3649e6ccba3233500"
+  },
+  "results/20260629_215011_GPT-2_Small.json": {
+    "mtime": 1782763316.81176,
+    "ast_hash": "0e7b500056deadbfeb5befd79b7a001c",
+    "semantic_hash": "0e7b500056deadbfeb5befd79b7a001c"
+  },
+  "results/20260629_215011_Memora.json": {
+    "mtime": 1782763316.8116686,
+    "ast_hash": "02c879be88c9c73c5091725f97ae4de6",
+    "semantic_hash": "02c879be88c9c73c5091725f97ae4de6"
+  },
+  "results/20260629_220953_Memora.json": {
+    "mtime": 1782764631.4668944,
+    "ast_hash": "13f075a85e5a75efbe9b8bf8288db9bb",
+    "semantic_hash": "13f075a85e5a75efbe9b8bf8288db9bb"
+  },
+  "results/20260629_220953_MemoraGLA.json": {
+    "mtime": 1782764631.4669952,
+    "ast_hash": "4b5c11b76a37879f52bff94b501f7f2b",
+    "semantic_hash": "4b5c11b76a37879f52bff94b501f7f2b"
+  },
+  "results/20260705_215517_Cortex.json": {
+    "mtime": 1783282158.5485263,
+    "ast_hash": "e4785e94a3cdaa9e4000d1db3609d14b",
+    "semantic_hash": "e4785e94a3cdaa9e4000d1db3609d14b"
+  },
+  "results/20260705_215517_GPT2.json": {
+    "mtime": 1783282158.5487278,
+    "ast_hash": "4e6de8ad46b4144a97da555780916a83",
+    "semantic_hash": "4e6de8ad46b4144a97da555780916a83"
+  },
+  "results/20260706_190423_Cortex.json": {
+    "mtime": 1783358425.6802847,
+    "ast_hash": "ced7c1bac512725aff40926454f59f8b",
+    "semantic_hash": "ced7c1bac512725aff40926454f59f8b"
+  },
+  "results/20260706_190423_GPT2.json": {
+    "mtime": 1783358425.680435,
+    "ast_hash": "b24c4f46ec3603e6911d2fe866971319",
+    "semantic_hash": "b24c4f46ec3603e6911d2fe866971319"
+  },
+  "results/20260708_195417_DeepSeek.json": {
+    "mtime": 1783534462.9690585,
+    "ast_hash": "38ca5a418c89ab63f3ddbd4df3fcbd04",
+    "semantic_hash": "38ca5a418c89ab63f3ddbd4df3fcbd04"
+  },
+  "results/20260708_195417_GPT2.json": {
+    "mtime": 1783534462.9697104,
+    "ast_hash": "facb4c98e303cbfec1d87be341e3a7a5",
+    "semantic_hash": "facb4c98e303cbfec1d87be341e3a7a5"
+  },
+  "results/Effy_Effy.json": {
+    "mtime": 1783725647.9012508,
+    "ast_hash": "0e9eefac9811b0508d5b0825bdac8efa",
+    "semantic_hash": "0e9eefac9811b0508d5b0825bdac8efa"
+  },
+  "results/Oneira_Oneira.json": {
+    "mtime": 1783723423.088515,
+    "ast_hash": "bfd0e976703d3d29daa81e90a0d74cb3",
+    "semantic_hash": "bfd0e976703d3d29daa81e90a0d74cb3"
+  },
+  "training/__init__.py": {
+    "mtime": 1783070616.7805834,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "training/bitlinear_deploy.py": {
+    "mtime": 1783354578.6214898,
+    "ast_hash": "2e755c6bfc8521d01feea58fa8a8ff6a",
+    "semantic_hash": "2e755c6bfc8521d01feea58fa8a8ff6a"
+  },
+  "training/compare.py": {
+    "mtime": 1783724577.7263381,
+    "ast_hash": "81b159ca5ea9ed61a47b12dbfc5c9382",
+    "semantic_hash": "81b159ca5ea9ed61a47b12dbfc5c9382"
+  },
+  "training/dataset.py": {
+    "mtime": 1782512247.7804468,
+    "ast_hash": "66388ea3c9bec6f85cd33781aabdc451",
+    "semantic_hash": "66388ea3c9bec6f85cd33781aabdc451"
+  },
+  "training/generate.py": {
+    "mtime": 1783354745.9911547,
+    "ast_hash": "7060614d579bcd81eb01b5c936fe2e94",
+    "semantic_hash": "7060614d579bcd81eb01b5c936fe2e94"
+  },
+  "training/train.py": {
+    "mtime": 1782647766.2927053,
+    "ast_hash": "3c2d3f2d1cb8d8f5836ab4948fabc241",
+    "semantic_hash": "3c2d3f2d1cb8d8f5836ab4948fabc241"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783763711.8264475,
+    "ast_hash": "0cfa2dcbaaf5840269c190de627ac150",
+    "semantic_hash": "0cfa2dcbaaf5840269c190de627ac150"
+  },
+  "README.md": {
+    "mtime": 1782554766.1651726,
+    "ast_hash": "b28a8fb3dc3460c1a03dd1eaab3a2817",
+    "semantic_hash": "b28a8fb3dc3460c1a03dd1eaab3a2817"
+  },
+  "models/cortex.md": {
+    "mtime": 1783266187.8783016,
+    "ast_hash": "2d9cf935e38941acd9e8357a2a0efebc",
+    "semantic_hash": "2d9cf935e38941acd9e8357a2a0efebc"
+  },
+  "results/wnb/gpu_memory_allocation_during_training.png": {
+    "mtime": 1782678081.5455241,
+    "ast_hash": "ce7ab12231903f3c0d9fcfaabc4ffced",
+    "semantic_hash": "ce7ab12231903f3c0d9fcfaabc4ffced"
+  },
+  "results/wnb/train_loss_per_token_seen.png": {
+    "mtime": 1782678048.3368473,
+    "ast_hash": "100e8ef21f1fa11aeb26b5f00262e110",
+    "semantic_hash": "100e8ef21f1fa11aeb26b5f00262e110"
+  },
+  "results/wnb/train_token_per_sec.png": {
+    "mtime": 1782678100.7980778,
+    "ast_hash": "5059900b53f7eb70d3eaddef1d89f522",
+    "semantic_hash": "5059900b53f7eb70d3eaddef1d89f522"
+  }
+}
