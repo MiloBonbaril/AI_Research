@@ -14,7 +14,7 @@ Usage :
     python -m training.compare --model cortex --duration 600      # --group omis → timestamp auto
     python -m training.compare --model oneira --no-save           # smoke test, pas de checkpoint
 
-Modèles disponibles (--model) : gpt2, cortex, deepseek, memora, oneira.
+Modèles disponibles (--model) : gpt2, cortex, deepseek, effy, memora, oneira.
 
 Axe de comparaison : tokens_seen (= steps × batch × grad_accum × context_len). Avec
 --max-steps le modèle voit un nombre de tokens fixé indépendamment de sa vitesse wall-clock —
@@ -45,6 +45,7 @@ from models.model_interface import LanguageModel
 from models.gpt2 import GPT2, GPT2Config
 from models.cortex import Cortex, CortexConfig
 from models.deepseek import DeepSeek, DeepSeekConfig
+from models.effy import Effy, EffyConfig
 from models.memora import Memora, MemoraConfig
 from models.oneira import Oneira, OneiraConfig
 
@@ -57,6 +58,7 @@ MODEL_REGISTRY = {
     "gpt2":     lambda args: GPT2(GPT2Config(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
     "cortex":   lambda args: Cortex(CortexConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
     "deepseek": lambda args: DeepSeek(DeepSeekConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
+    "effy":     lambda args: Effy(EffyConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
     "memora":   lambda args: Memora(MemoraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
     "oneira":   lambda args: Oneira(OneiraConfig(vocab_size=50257, dropout=0.1, context_len=args.context_len)),
 }
