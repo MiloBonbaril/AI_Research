@@ -1,0 +1,21 @@
+{
+  "name": "webapp",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts",
+    "gen-data": "cd .. && .venv/bin/python webapp/scripts/gen_data.py"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/three": "^0.185.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}

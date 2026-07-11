@@ -1,0 +1,1038 @@
+{
+  "models": [
+    {
+      "id": "gpt2",
+      "name": "GPT-2 Small",
+      "description": "R\u00e9f\u00e9rence GPT-2 Small \u2014 attention pleine softmax \u00e0 chaque couche, co\u00fbt quadratique en longueur de s\u00e9quence. La ligne de base contre laquelle toutes les architectures sub-quadratiques sont mesur\u00e9es.",
+      "config": {
+        "vocab_size": 50257,
+        "context_len": 1024,
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768
+      },
+      "total_params": 123653376,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 1,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 2,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 3,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 4,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 5,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 6,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 7,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 8,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 9,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 10,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 11,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "cortex",
+      "name": "Sparse-Cortex",
+      "description": "Sparse-Cortex \u2014 poids ternaires {-1,0,+1} (BitNet b1.58) dans toutes les projections internes, FFN ReLU\u00b2 \u00e0 sparsit\u00e9 \u00e9mergente. Phase actuelle : attention pleine ternaris\u00e9e ; l'hybride GDN+SWA est la prochaine \u00e9tape (cf. models/cortex.md).",
+      "config": {
+        "vocab_size": 50257,
+        "context_len": 1024,
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768
+      },
+      "total_params": 123634944,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 1,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 2,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 3,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 4,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 5,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 6,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 7,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 8,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 9,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 10,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        },
+        {
+          "index": 11,
+          "kind": "ternary-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7086336,
+          "detail": {
+            "ternary": true
+          }
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "effy",
+      "name": "Effy",
+      "description": "Effy \u2014 attention lin\u00e9aire (noyau \u03c6(q)\u00b7\u03c6(k), \u00e9tat taille fixe) sur la majorit\u00e9 des couches, avec un petit nombre de couches de \u00ab rappel \u00bb en attention pleine pour le recall exact que le noyau lin\u00e9aire perd.",
+      "config": {
+        "vocab_size": 50257,
+        "context_len": 1024,
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768,
+        "recall_layers": [
+          3,
+          7,
+          11
+        ]
+      },
+      "total_params": 123653376,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 1,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 2,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 3,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 4,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 5,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 6,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 7,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 8,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 9,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 10,
+          "kind": "linear-attention",
+          "mixer_class": "LinearAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        },
+        {
+          "index": 11,
+          "kind": "full-attention",
+          "mixer_class": "CausalSelfAttention",
+          "mlp_class": "FeedForward",
+          "params": 7087872,
+          "detail": {}
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek(mini)",
+      "description": "DeepSeek(mini) \u2014 Hyper-Connections contraintes (mHC, flux r\u00e9siduels multiples via matrice doublement stochastique) + attention compress\u00e9e hybride CSA (s\u00e9lection top-k) / HCA (dense sur blocs compress\u00e9s).",
+      "config": {
+        "vocab_size": 50257,
+        "context_len": 1024,
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768,
+        "sliding_window": 128,
+        "csa_layers": [
+          3,
+          7,
+          11
+        ],
+        "hc_streams": 4
+      },
+      "total_params": 125681622,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 1,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 2,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 3,
+          "kind": "csa",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7278462,
+          "detail": {
+            "block": 16,
+            "topk": 8
+          }
+        },
+        {
+          "index": 4,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 5,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 6,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 7,
+          "kind": "csa",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7278462,
+          "detail": {
+            "block": 16,
+            "topk": 8
+          }
+        },
+        {
+          "index": 8,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 9,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 10,
+          "kind": "hca",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7249788,
+          "detail": {
+            "block": 64,
+            "topk": null
+          }
+        },
+        {
+          "index": 11,
+          "kind": "csa",
+          "mixer_class": "CompressedAttention",
+          "mlp_class": "SwiGLU",
+          "params": 7278462,
+          "detail": {
+            "block": 16,
+            "topk": 8
+          }
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "memora",
+      "name": "Memora",
+      "description": "Memora \u2014 hybride attention locale (fen\u00eatre glissante + GQA + RoPE) et Gated Linear Attention (GLA, \u00e9tat r\u00e9current taille fixe) pour un contexte non born\u00e9 \u00e0 co\u00fbt lin\u00e9aire sur les couches GLA.",
+      "config": {
+        "vocab_size": 49152,
+        "context_len": 2048,
+        "n_layer": 14,
+        "n_head": 12,
+        "n_embd": 768,
+        "sliding_window": 512,
+        "recurrent_layers": [
+          3,
+          7,
+          10,
+          13
+        ],
+        "global_layers": [
+          5,
+          11
+        ]
+      },
+      "total_params": 125965952,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 1,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 2,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 3,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 4,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 5,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 6,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 7,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 8,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 9,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 10,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 11,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 12,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 13,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "memora_gla",
+      "name": "Memora-GLA",
+      "description": "Memora-GLA \u2014 variante \u00e0 dominante GLA (10 couches GLA sur 14) avec seulement 2 couches d'attention globale et 2 locales pour l'ancrage.",
+      "config": {
+        "vocab_size": 49152,
+        "context_len": 2048,
+        "n_layer": 14,
+        "n_head": 12,
+        "n_embd": 768,
+        "sliding_window": 512,
+        "recurrent_layers": [
+          0,
+          1,
+          2,
+          4,
+          6,
+          8,
+          9,
+          11,
+          12,
+          13
+        ],
+        "global_layers": [
+          5,
+          10
+        ]
+      },
+      "total_params": 125683520,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 1,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 2,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 3,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 5738624,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 4,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 5,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 5738624,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 6,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 7,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 5738624,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 8,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 9,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 10,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 5738624,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 11,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 12,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        },
+        {
+          "index": 13,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6497952,
+          "detail": {}
+        }
+      ],
+      "extras": []
+    },
+    {
+      "id": "oneira",
+      "name": "Oneira",
+      "description": "Oneira \u2014 backbone Memora + t\u00eate de simulation \u00ab monde \u00bb : un op\u00e9rateur F par horizon temporel fait \u00e9voluer l'\u00e9tat GLA sans texte r\u00e9el, simulant plusieurs futurs possibles en parall\u00e8le (multivers).",
+      "config": {
+        "vocab_size": 50257,
+        "context_len": 2048,
+        "n_layer": 14,
+        "n_head": 12,
+        "n_embd": 768,
+        "sliding_window": 512,
+        "recurrent_layers": [
+          3,
+          7,
+          10,
+          13
+        ],
+        "global_layers": [
+          5,
+          11
+        ],
+        "sim_horizons": [
+          1,
+          4
+        ],
+        "sim_n_layer": 2
+      },
+      "total_params": 159557952,
+      "blocks": [
+        {
+          "index": 0,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 1,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 2,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 3,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 4,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 5,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 6,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 7,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 8,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 9,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 10,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        },
+        {
+          "index": 11,
+          "kind": "global-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": null
+          }
+        },
+        {
+          "index": 12,
+          "kind": "local-attention",
+          "mixer_class": "LocalAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6084224,
+          "detail": {
+            "window": 512
+          }
+        },
+        {
+          "index": 13,
+          "kind": "gla",
+          "mixer_class": "GatedLinearAttention",
+          "mlp_class": "SwiGLU",
+          "params": 6843552,
+          "detail": {}
+        }
+      ],
+      "extras": [
+        {
+          "name": "sim_head",
+          "kind": "simulation-head",
+          "class": "SimulationHead",
+          "params": 15169024,
+          "detail": {
+            "sim_n_layer": 2,
+            "sim_chunk": 64
+          }
+        },
+        {
+          "name": "action_proj",
+          "kind": "projection",
+          "class": "Linear",
+          "params": 196608,
+          "detail": {
+            "action_dim": 256
+          }
+        },
+        {
+          "name": "F[1]",
+          "kind": "world-operator",
+          "class": "WorldOperator",
+          "params": 8688864,
+          "detail": {
+            "horizon_chunks": 1
+          }
+        },
+        {
+          "name": "F[4]",
+          "kind": "world-operator",
+          "class": "WorldOperator",
+          "params": 8688864,
+          "detail": {
+            "horizon_chunks": 4
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture Atlas</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♞</text></svg>" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>ARCHITECTURE ATLAS</h1>
+        <span class="tagline">sub-quadratic LLM research · models/ visualized in 3D</span>
+      </header>
+      <nav id="tabs"></nav>
+      <main>
+        <canvas id="scene"></canvas>
+        <section id="info" class="overlay-panel">
+          <h2 id="info-name">—</h2>
+          <div class="params" id="info-params"></div>
+          <p class="desc" id="info-desc"></p>
+          <div class="cfg" id="info-cfg"></div>
+        </section>
+        <section id="legend" class="overlay-panel"></section>
+        <section id="tooltip" class="overlay-panel">
+          <div class="t-title" id="tooltip-title"></div>
+          <div id="tooltip-body"></div>
+        </section>
+        <div id="hint">drag to orbit · scroll to zoom · hover a layer</div>
+      </main>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

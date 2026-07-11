@@ -1,0 +1,224 @@
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;500;600&display=swap");
+
+:root {
+  --bg-0: #030110;
+  --bg-1: #0a0620;
+  --panel: rgba(18, 10, 46, 0.72);
+  --panel-border: rgba(139, 92, 246, 0.35);
+  --violet: #a78bfa;
+  --violet-bright: #c4b5fd;
+  --cyan: #22d3ee;
+  --magenta: #e879f9;
+  --text: #e9e4ff;
+  --text-dim: #8f88b5;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(ellipse at 50% -10%, #1b1040 0%, var(--bg-1) 45%, var(--bg-0) 100%);
+  color: var(--text);
+  font-family: "Rajdhani", "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 1.2rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, rgba(30, 12, 66, 0.85), rgba(10, 6, 32, 0.4));
+  backdrop-filter: blur(6px);
+  z-index: 5;
+}
+
+header h1 {
+  font-family: "Orbitron", sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0;
+  background: linear-gradient(90deg, var(--violet-bright), var(--cyan));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+}
+
+header .tagline {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+#tabs {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.55rem 1.2rem;
+  border-bottom: 1px solid var(--panel-border);
+  overflow-x: auto;
+  background: rgba(8, 4, 24, 0.55);
+  z-index: 5;
+}
+
+.tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--text-dim);
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+  border-color: var(--panel-border);
+}
+
+.tab.active {
+  color: #0a0620;
+  background: linear-gradient(90deg, var(--violet-bright), var(--cyan));
+  box-shadow: 0 0 18px rgba(167, 139, 250, 0.55);
+}
+
+main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+canvas#scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.overlay-panel {
+  position: absolute;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 30px rgba(88, 28, 135, 0.25);
+}
+
+#info {
+  top: 1rem;
+  left: 1rem;
+  width: 320px;
+  max-width: 40vw;
+  padding: 0.9rem 1.1rem;
+}
+
+#info h2 {
+  margin: 0 0 0.3rem;
+  font-family: "Orbitron", sans-serif;
+  font-size: 1rem;
+  color: var(--violet-bright);
+}
+
+#info .params {
+  color: var(--cyan);
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+#info p.desc {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text);
+  margin: 0 0 0.6rem;
+}
+
+#info .cfg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+#info .cfg span {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: rgba(103, 232, 249, 0.08);
+  border: 1px solid rgba(103, 232, 249, 0.25);
+  border-radius: 5px;
+  padding: 0.12rem 0.4rem;
+  white-space: nowrap;
+}
+
+#legend {
+  bottom: 1rem;
+  left: 1rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  max-width: 280px;
+}
+
+#legend .row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-dim);
+}
+
+#legend .swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+
+#tooltip {
+  top: 1rem;
+  right: 1rem;
+  padding: 0.7rem 0.9rem;
+  max-width: 280px;
+  pointer-events: none;
+  display: none;
+}
+
+#tooltip.visible { display: block; }
+
+#tooltip .t-title {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.8rem;
+  color: var(--magenta);
+  margin-bottom: 0.35rem;
+}
+
+#tooltip .t-line {
+  font-size: 0.78rem;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+#hint {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
