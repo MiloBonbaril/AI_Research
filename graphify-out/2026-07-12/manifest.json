@@ -25,14 +25,14 @@
     "semantic_hash": "810dcba8d98333bea4b403704bce297b"
   },
   "models/deepseek.py": {
-    "mtime": 1783892773.89974,
-    "ast_hash": "eee7c2b917ba466507d7a234923f2675",
-    "semantic_hash": ""
+    "mtime": 1783531443.5002823,
+    "ast_hash": "f38743eba6a16a4eedb5d26474d4af51",
+    "semantic_hash": "f38743eba6a16a4eedb5d26474d4af51"
   },
   "models/effy.py": {
-    "mtime": 1783774580.2683408,
-    "ast_hash": "95106c9615855c4eab25474ded326b94",
-    "semantic_hash": ""
+    "mtime": 1783724445.283882,
+    "ast_hash": "c46094e96f526d1d55a3d097c88ff8f2",
+    "semantic_hash": "c46094e96f526d1d55a3d097c88ff8f2"
   },
   "models/gpt2.py": {
     "mtime": 1783265305.5052335,
@@ -50,9 +50,9 @@
     "semantic_hash": "3958e51b598b4107a37d59608ba87350"
   },
   "models/model_interface.py": {
-    "mtime": 1783892801.7177396,
-    "ast_hash": "b342052ef78fc33e0368e5962766025c",
-    "semantic_hash": ""
+    "mtime": 1783531076.5752034,
+    "ast_hash": "ad64f40495bb44a86f5d5d21521fd50e",
+    "semantic_hash": "ad64f40495bb44a86f5d5d21521fd50e"
   },
   "models/oneira.py": {
     "mtime": 1783719515.3582532,
@@ -200,9 +200,9 @@
     "semantic_hash": "facb4c98e303cbfec1d87be341e3a7a5"
   },
   "results/Effy_Effy.json": {
-    "mtime": 1783775155.149665,
-    "ast_hash": "e2c3d5ea3cd6c4f517153bd33bc001d2",
-    "semantic_hash": ""
+    "mtime": 1783725647.9012508,
+    "ast_hash": "0e9eefac9811b0508d5b0825bdac8efa",
+    "semantic_hash": "0e9eefac9811b0508d5b0825bdac8efa"
   },
   "results/Oneira_Oneira.json": {
     "mtime": 1783723423.088515,
@@ -220,9 +220,9 @@
     "semantic_hash": "2e755c6bfc8521d01feea58fa8a8ff6a"
   },
   "training/compare.py": {
-    "mtime": 1783892832.143639,
-    "ast_hash": "796862d9a5ee2a1b38746d09c406ef65",
-    "semantic_hash": ""
+    "mtime": 1783724577.7263381,
+    "ast_hash": "81b159ca5ea9ed61a47b12dbfc5c9382",
+    "semantic_hash": "81b159ca5ea9ed61a47b12dbfc5c9382"
   },
   "training/dataset.py": {
     "mtime": 1782512247.7804468,
@@ -268,75 +268,5 @@
     "mtime": 1782678100.7980778,
     "ast_hash": "5059900b53f7eb70d3eaddef1d89f522",
     "semantic_hash": "5059900b53f7eb70d3eaddef1d89f522"
-  },
-  "results/DeepSeek_DeepSeek.json": {
-    "mtime": 1783889370.0042946,
-    "ast_hash": "fa8e967ae5e99cfd09f168940f853574",
-    "semantic_hash": ""
-  },
-  "webapp/index.ts": {
-    "mtime": 1783767991.0082448,
-    "ast_hash": "471a2845d84b13d50c1e3ec2b907ac63",
-    "semantic_hash": ""
-  },
-  "webapp/package.json": {
-    "mtime": 1783768415.7028413,
-    "ast_hash": "2353e4b0f57b6a05dc3a8019c5de72a8",
-    "semantic_hash": ""
-  },
-  "webapp/public/data/models.json": {
-    "mtime": 1783774784.6908588,
-    "ast_hash": "5278a9a4d2603b9777f9432c83433fdb",
-    "semantic_hash": ""
-  },
-  "webapp/scripts/gen_data.py": {
-    "mtime": 1783767819.8005505,
-    "ast_hash": "ef0ff79fb4afaddafe161c3d8683291c",
-    "semantic_hash": ""
-  },
-  "webapp/src/main.ts": {
-    "mtime": 1783768118.8973215,
-    "ast_hash": "178bbe9a382c8105e9dfd1565071607b",
-    "semantic_hash": ""
-  },
-  "webapp/src/scene.ts": {
-    "mtime": 1783768605.1969166,
-    "ast_hash": "dc8042d576b78f571e0d86d004c5feab",
-    "semantic_hash": ""
-  },
-  "webapp/src/theme.ts": {
-    "mtime": 1783768021.815315,
-    "ast_hash": "a0cea35f9813764a0c42d9123097f4b2",
-    "semantic_hash": ""
-  },
-  "webapp/src/types.ts": {
-    "mtime": 1783767994.8294544,
-    "ast_hash": "a4d1aacfa806cffebb465767188f6030",
-    "semantic_hash": ""
-  },
-  "webapp/tsconfig.json": {
-    "mtime": 1783768130.069659,
-    "ast_hash": "3397baa3b7f08c82db9873a736658d47",
-    "semantic_hash": ""
-  },
-  "optimization_report.md": {
-    "mtime": 1783889270.9865391,
-    "ast_hash": "181171a7b901467af628bfaf205c9987",
-    "semantic_hash": ""
-  },
-  "webapp/CLAUDE.md": {
-    "mtime": 1783767932.4954195,
-    "ast_hash": "0343090fed5a005a8cb50731972341fe",
-    "semantic_hash": ""
-  },
-  "webapp/README.md": {
-    "mtime": 1783768435.081594,
-    "ast_hash": "d9d02a8c73f340252133ee4bfa50bece",
-    "semantic_hash": ""
-  },
-  "webapp/index.html": {
-    "mtime": 1783768422.4480257,
-    "ast_hash": "1f6e4291db8183e74e3bf5d7f90cee46",
-    "semantic_hash": ""
   }
 }

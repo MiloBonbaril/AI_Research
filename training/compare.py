@@ -102,20 +102,24 @@ def train_model(
     Utilise AdamW avec cosine annealing. Le timer / compteur de steps est
     vérifié après chaque step (pas chaque micro-batch).
 
-    NB: si use_compile, `model` est recompilé dans une variable LOCALE (torch.compile ne
-    clone pas les paramètres) — l'objet passé par l'appelant reste la référence non-compilée
-    et se retrouve entraîné (mêmes tenseurs Parameter) une fois cette fonction retournée ;
-    c'est lui que main() sauvegarde ensuite.
+    NB: si use_compile, on compile la MÉTHODE model.loss — le chemin réellement exécuté.
+    torch.compile(model) ne compilerait que forward() : model.loss() délègue au module
+    original et contournerait silencieusement la compilation (vérifié : 0 frame dynamo
+    tracée dans ce cas). Les Parameter restent partagés — l'objet passé par l'appelant
+    est bien celui qui s'entraîne, c'est lui que main() sauvegarde ensuite. evaluate()
+    reste en eager (une seule éval en fin de run, pas de quoi amortir une compilation).
     """
     assert (duration_seconds is None) != (max_steps is None), \
         "fournir exactement un de duration_seconds ou max_steps"
 
     model.to(device)
     model.train()
+    loss_fn = model.loss
     if use_compile and device == "cuda":
-        model = torch.compile(model)
+        loss_fn = torch.compile(loss_fn)   # cf. NB docstring : compiler loss, pas le module
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95),
+                                  weight_decay=0.1, fused=(device == "cuda"))
 
     # ponytail: cosine decay vers lr/10, estimation du total ajustée à step=10
     def get_lr(step: int, est_total: int) -> float:
@@ -160,7 +164,7 @@ def train_model(
             pg["lr"] = current_lr
 
         optimizer.zero_grad()
-        accum_loss = 0.0
+        accum_loss = torch.zeros((), device=device)   # accumulée sur device, un seul sync/step
 
         for micro in range(grad_accum_steps):
             try:
@@ -169,24 +173,25 @@ def train_model(
                 data_iter = iter(train_loader)
                 x, y = next(data_iter)
 
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with _amp(device):
-                loss = model.loss(x, y) / grad_accum_steps
+                loss = loss_fn(x, y) / grad_accum_steps
             loss.backward()
-            accum_loss += loss.item()
+            accum_loss += loss.detach()   # .item() ici = un sync GPU par micro-batch
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
         step += 1
+        loss_val = accum_loss.item()      # sync unique, après optimizer.step()
         batch_tokens = x.size(0) * x.size(1) * grad_accum_steps
         tokens_seen += batch_tokens
-        running_loss += accum_loss
+        running_loss += loss_val
 
         if wandb_run is not None:
             elapsed = time.monotonic() - start_time
             wandb_run.log({
-                "train/loss": accum_loss,
+                "train/loss": loss_val,
                 "train/lr": current_lr,
                 "train/tok_per_sec": tokens_seen / elapsed,
                 "tokens_seen": tokens_seen,
@@ -314,7 +319,6 @@ def main():
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-project", type=str, default="memora-vs-gpt2")
     parser.add_argument("--no-compile", action="store_true")
-    parser.add_argument("--grad-checkpoint", action="store_true")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     parser.add_argument("--no-save", action="store_true", help="Ne pas sauvegarder le modèle entraîné")
     args = parser.parse_args()

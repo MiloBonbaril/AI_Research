@@ -221,6 +221,7 @@ class CompressedAttention(nn.Module):
 
     def __init__(self, c: DeepSeekConfig, block: int, use_topk: bool, topk: int = 0):
         super().__init__()
+        assert c.n_head % c.n_kv_heads_window == 0, "n_head doit être multiple de n_kv_heads_window"
         self.n_head, self.hd = c.n_head, c.head_dim
         self.n_kv_win = c.n_kv_heads_window
         self.block = block
@@ -229,33 +230,32 @@ class CompressedAttention(nn.Module):
         self.dropout = c.dropout
         self.sliding_window = c.sliding_window
 
-        # requête partagée par les deux branches
-        self.q_proj = nn.Linear(c.n_embd, self.n_head * self.hd, bias=c.bias)
-
-        # branche fenêtre locale (RoPE + GQA, cf. LocalAttention de Memora)
-        self.k_win = nn.Linear(c.n_embd, self.n_kv_win * self.hd, bias=c.bias)
-        self.v_win = nn.Linear(c.n_embd, self.n_kv_win * self.hd, bias=c.bias)
-
-        # branche compressée : contenu → pooling appris par bloc → K/V partagés (MQA)
+        # Projections d'entrée fusionnées en UN GEMM sur x (même idiome que c_attn de GPT-2) :
+        # q | k_win | v_win | contenu compressé | gate [| iq indexeur] — mêmes matrices
+        # qu'avant (mêmes tailles, même init par tranche), un seul launch de kernel.
         # ponytail: un seul flux de compression par bloc (le papier utilise deux flux
         # chevauchants C^a/C^b) — plus simple, quantité de blocs déjà généreuse à cette échelle.
-        self.c_proj = nn.Linear(c.n_embd, c.d_compress, bias=c.bias)
-        self.pool_score = nn.Linear(c.d_compress, 1, bias=c.bias)
-        self.k_comp = nn.Linear(c.d_compress, self.hd, bias=c.bias)
-        self.v_comp = nn.Linear(c.d_compress, self.hd, bias=c.bias)
-        self.sink = nn.Parameter(torch.zeros(self.n_head))   # attention sink par tête
-
+        self.splits = [self.n_head * self.hd,      # q — partagée par les deux branches
+                       self.n_kv_win * self.hd,    # k fenêtre locale (GQA)
+                       self.n_kv_win * self.hd,    # v fenêtre locale
+                       c.d_compress,               # contenu → pooling appris par bloc
+                       2 * self.n_head]            # porte de fusion par tête
         if use_topk:
             self.index_dim = c.index_dim
             self.index_heads = c.index_heads
-            self.iq_proj = nn.Linear(c.n_embd, c.index_dim * c.index_heads, bias=c.bias)
+            self.splits.append(c.index_dim * c.index_heads)   # requêtes de l'indexeur
             self.ik_proj = nn.Linear(c.d_compress, c.index_dim * c.index_heads, bias=c.bias)
             # ponytail: poids d'agrégation des têtes de l'indexeur statiques (appris mais pas
             # dépendants du token) — le papier les génère par token (w_{t,h}) ; un vecteur
             # global suffit pour apprendre "quelle tête d'index pondérer davantage" à 126M.
             self.idx_w = nn.Parameter(torch.ones(c.index_heads))
+        self.in_proj = nn.Linear(c.n_embd, sum(self.splits), bias=c.bias)
 
-        self.gate = nn.Linear(c.n_embd, 2 * self.n_head, bias=c.bias)
+        self.pool_score = nn.Linear(c.d_compress, 1, bias=c.bias)
+        self.k_comp = nn.Linear(c.d_compress, self.hd, bias=c.bias)
+        self.v_comp = nn.Linear(c.d_compress, self.hd, bias=c.bias)
+        self.sink = nn.Parameter(torch.zeros(self.n_head))   # attention sink par tête
+
         self.o_proj = nn.Linear(self.n_head * self.hd, c.n_embd, bias=c.bias)
 
         self.use_qk_norm = c.use_qk_norm
@@ -264,30 +264,29 @@ class CompressedAttention(nn.Module):
             self.k_norm_win = RMSNorm(self.hd, c.norm_eps)
             self.k_norm_comp = RMSNorm(self.hd, c.norm_eps)
 
-    def _compress(self, x: torch.Tensor):
-        """Pooling appris (softmax intra-bloc) : (B,T,d) → (B,nb,d_c) + fin de bloc source."""
-        B, T, _ = x.shape
+    def _compress(self, c: torch.Tensor) -> torch.Tensor:
+        """Pooling appris (softmax intra-bloc) : (B,T,d_c) → (B,nb,d_c)."""
+        B, T, _ = c.shape
         m = self.block
         pad = (m - T % m) % m
-        c = self.c_proj(x)                                    # (B,T,d_c)
         if pad:
             c = F.pad(c, (0, 0, 0, pad))
-        Tp = T + pad
-        nb = Tp // m
+        nb = (T + pad) // m
         c = c.view(B, nb, m, -1)
         w = self.pool_score(c).softmax(dim=2)                 # (B,nb,m,1)
-        comp = (c * w).sum(dim=2)                             # (B,nb,d_c)
-        # dernier index de token SOURCE (dans la séquence réelle, non paddée) de chaque bloc.
-        # Un bloc dont la fin dépasse T (bloc final tronqué par le padding) reste ainsi
-        # inatteignable par toute requête réelle → aucune fuite via le padding.
-        end_idx = torch.arange(m, Tp + 1, m, device=x.device) - 1   # (nb,)
-        return comp, end_idx
+        return (c * w).sum(dim=2)                             # (B,nb,d_c)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+                win_allowed: torch.Tensor, causal_block: torch.Tensor) -> torch.Tensor:
+        # win_allowed (T,T) bool et causal_block (T,nb) bool ne dépendent que de T →
+        # construits UNE fois par forward dans DeepSeek.forward, pas dans chaque couche.
         B, T, _ = x.shape
         H, hd = self.n_head, self.hd
 
-        q = self.q_proj(x).view(B, T, H, hd).transpose(1, 2)     # (B,H,T,hd)
+        parts = self.in_proj(x).split(self.splits, dim=-1)       # un seul GEMM d'entrée
+        q_raw, kw_raw, vw_raw, c_lat, gate_raw = parts[:5]
+
+        q = q_raw.view(B, T, H, hd).transpose(1, 2)              # (B,H,T,hd)
         if self.use_qk_norm:
             q = self.q_norm(q)
         q_win = apply_rope(q, cos, sin)                          # branche fenêtre : avec RoPE
@@ -295,32 +294,31 @@ class CompressedAttention(nn.Module):
         # position propre (absorbée par le pooling), donc pas de rotation à leur appliquer.
 
         # --- branche fenêtre locale ---
-        k_w = self.k_win(x).view(B, T, self.n_kv_win, hd).transpose(1, 2)
-        v_w = self.v_win(x).view(B, T, self.n_kv_win, hd).transpose(1, 2)
+        k_w = kw_raw.view(B, T, self.n_kv_win, hd).transpose(1, 2)
+        v_w = vw_raw.view(B, T, self.n_kv_win, hd).transpose(1, 2)
         if self.use_qk_norm:
             k_w = self.k_norm_win(k_w)
         k_w = apply_rope(k_w, cos, sin)
-        i = torch.arange(T, device=x.device)[:, None]
-        j = torch.arange(T, device=x.device)[None, :]
-        allowed = (i >= j) & (i - j < self.sliding_window)
-        win_mask = torch.where(allowed, 0.0, float("-inf")).to(q.dtype)
+        # Masque BOOLÉEN + têtes KV expansées (pas de enable_gqa) : rend l'appel éligible
+        # au backend memory-efficient de SDPA. L'ancien masque float -inf + enable_gqa
+        # forçait le backend math ((B,H,T,T) matérialisée) — mêmes maths, sans ce coût.
+        rep = H // self.n_kv_win
         y_win = F.scaled_dot_product_attention(
-            q_win, k_w, v_w, attn_mask=win_mask, enable_gqa=True,
+            q_win, k_w.repeat_interleave(rep, dim=1), v_w.repeat_interleave(rep, dim=1),
+            attn_mask=win_allowed,
             dropout_p=self.dropout if self.training else 0.0,
         )                                                        # (B,H,T,hd)
 
         # --- branche compressée (CSA ou HCA) ---
-        comp, end_idx = self._compress(x)                        # (B,nb,d_c), (nb,)
+        comp = self._compress(c_lat)                             # (B,nb,d_c)
         nb = comp.size(1)
         k_c = self.k_comp(comp)                                  # (B,nb,hd)
         v_c = self.v_comp(comp)                                  # (B,nb,hd)
         if self.use_qk_norm:
             k_c = self.k_norm_comp(k_c)
 
-        causal_block = end_idx[None, :] <= torch.arange(T, device=x.device)[:, None]  # (T,nb)
-
         if self.use_topk:
-            iq = self.iq_proj(x).view(B, T, self.index_heads, self.index_dim)
+            iq = parts[5].view(B, T, self.index_heads, self.index_dim)
             ik = self.ik_proj(comp).view(B, nb, self.index_heads, self.index_dim)
             dots = torch.einsum("bthd,bshd->bhts", iq, ik)                 # (B,Hidx,T,nb)
             idx_score = torch.einsum("bhts,h->bts", F.relu(dots), self.idx_w)
@@ -351,7 +349,7 @@ class CompressedAttention(nn.Module):
         y_comp = torch.einsum("bhts,bsd->bhtd", attn_kv, v_c)                # (B,H,T,hd)
 
         # --- fusion par porte apprise (par tête) ---
-        g = torch.sigmoid(self.gate(x)).view(B, T, H, 2).permute(0, 2, 1, 3)  # (B,H,T,2)
+        g = torch.sigmoid(gate_raw).view(B, T, H, 2).permute(0, 2, 1, 3)      # (B,H,T,2)
         y = g[..., 0:1] * y_comp + g[..., 1:2] * y_win
 
         y = y.transpose(1, 2).contiguous().view(B, T, H * hd)
@@ -371,8 +369,9 @@ class Block(nn.Module):
         self.hc_attn = HyperConnections(c)
         self.hc_mlp = HyperConnections(c)
 
-    def forward(self, X: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        X = self.hc_attn(X, self.attn, cos, sin)
+    def forward(self, X: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+                win_allowed: torch.Tensor, blk_causal: dict) -> torch.Tensor:
+        X = self.hc_attn(X, self.attn, cos, sin, win_allowed, blk_causal[self.attn.block])
         X = self.hc_mlp(X, self.mlp)
         return X
 
@@ -441,13 +440,27 @@ class DeepSeek(LanguageModel):
         )
         cos, sin = self._rope(T, idx.device, self.tok_embd.weight.dtype)
 
+        # Masques ne dépendant que de T — construits UNE fois par forward et passés aux
+        # couches (ils étaient identiques dans les 12 couches).
+        i = torch.arange(T, device=idx.device)[:, None]
+        j = torch.arange(T, device=idx.device)[None, :]
+        win_allowed = (i >= j) & (i - j < self.config.sliding_window)     # (T,T) bool
+        blk_causal = {}
+        for m in {self.config.csa_block, self.config.hca_block}:
+            Tp = T + (m - T % m) % m
+            # dernier index de token SOURCE (séquence réelle, non paddée) de chaque bloc.
+            # Un bloc dont la fin dépasse T (bloc final tronqué par le padding) reste ainsi
+            # inatteignable par toute requête réelle → aucune fuite via le padding.
+            end_idx = torch.arange(m, Tp + 1, m, device=idx.device) - 1   # (nb,)
+            blk_causal[m] = end_idx[None, :] <= i                         # (T,nb) bool
+
         x = self.tok_embd(idx)                                            # (B,T,d)
         # flux mHC initial : x réparti également entre les n flux (leur somme = x),
         # cohérent avec un résiduel classique avant tout apprentissage.
         X = (x / self.hc_streams).unsqueeze(2).expand(B, T, self.hc_streams, -1).contiguous()
 
         for block in self.blocks:
-            X = block(X, cos, sin)
+            X = block(X, cos, sin, win_allowed, blk_causal)
 
         x = X.sum(dim=2)                                                  # collapse des flux
         x = self.norm_f(x)
@@ -497,12 +510,22 @@ if __name__ == "__main__":
     cos, sin = build_rope_cache(20, cfg_a.head_dim, cfg_a.rope_theta, "cpu", torch.float32)
     x = torch.randn(2, 20, cfg_a.n_embd)
 
+    # masques normalement construits par DeepSeek.forward — reconstruits ici à la main
+    T = 20
+    i = torch.arange(T)[:, None]
+    j = torch.arange(T)[None, :]
+    win_allowed = (i >= j) & (i - j < cfg_a.sliding_window)
+
+    def _blk_causal(m: int) -> torch.Tensor:
+        Tp = T + (m - T % m) % m
+        return (torch.arange(m, Tp + 1, m) - 1)[None, :] <= i
+
     hca = CompressedAttention(cfg_a, block=cfg_a.hca_block, use_topk=False)
-    y_hca = hca(x, cos, sin)
+    y_hca = hca(x, cos, sin, win_allowed, _blk_causal(cfg_a.hca_block))
     assert y_hca.shape == x.shape, f"forme HCA inattendue : {y_hca.shape}"
 
     csa = CompressedAttention(cfg_a, block=cfg_a.csa_block, use_topk=True, topk=cfg_a.csa_topk)
-    y_csa = csa(x, cos, sin)
+    y_csa = csa(x, cos, sin, win_allowed, _blk_causal(cfg_a.csa_block))
     assert y_csa.shape == x.shape, f"forme CSA inattendue : {y_csa.shape}"
     print(f"CompressedAttention OK — HCA {tuple(y_hca.shape)}, CSA {tuple(y_csa.shape)}")
 
@@ -534,11 +557,15 @@ if __name__ == "__main__":
         g = params[pname].grad
         assert g is not None and torch.isfinite(g).all(), f"gradient manquant/non-fini : {pname}"
     # l'indexeur "lightning" (CSA, couche 3) doit recevoir un gradient NON NUL — le top-k est
-    # non-différentiable ; sans biaiser les logits par idx_score, iq_proj/ik_proj/idx_w restent
+    # non-différentiable ; sans biaiser les logits par idx_score, iq/ik_proj/idx_w restent
     # figés à l'init (sélection aléatoire mais fixe pour tout l'entraînement). Régression gardée ici.
-    for pname in ("blocks.3.attn.iq_proj.weight", "blocks.3.attn.ik_proj.weight", "blocks.3.attn.idx_w"):
+    for pname in ("blocks.3.attn.ik_proj.weight", "blocks.3.attn.idx_w"):
         g = params[pname].grad
         assert g is not None and g.abs().sum() > 0, f"indexeur CSA mort (gradient nul) : {pname}"
+    # iq vit désormais dans in_proj (projections fusionnées) : ses lignes sont le dernier split
+    attn3 = model.blocks[3].attn
+    iq_grad = attn3.in_proj.weight.grad[-attn3.splits[-1]:]
+    assert iq_grad.abs().sum() > 0, "indexeur CSA mort (gradient nul) : lignes iq de in_proj"
     print(f"forward/loss/backward OK — loss={loss.item():.3f}, indexeur CSA vivant")
     model.eval()
     out = model.generate(idx[:, :5], max_new_tokens=10)

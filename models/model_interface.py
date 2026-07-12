@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +75,7 @@ class LanguageModel(ABC, nn.Module):
 
     def loss(self, idx: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
-        Cross-entropy sur les logits.
+        Cross-entropy sur les logits, par chunks re-calculés au backward.
 
         Args:
             idx:     (B, T) tokens d'entrée.
@@ -82,12 +83,28 @@ class LanguageModel(ABC, nn.Module):
 
         Returns:
             Scalaire, la loss moyenne.
+
+        Sous autocast, cross_entropy promeut les logits en fp32 : en un seul appel sur
+        (B·T, vocab) ça matérialise ~1.2 Go de fp32 (copie + log_softmax sauvegardé pour
+        le backward) à B·T=3072, vocab=50257. Découper en chunks passés par checkpoint
+        borne ce pic à ~2×chunk×vocab×4 octets, au prix d'un recalcul de la CE au
+        backward (négligeable devant le forward). Même loss (somme/n == moyenne),
+        mêmes gradients.
         """
         logits = self.forward(idx)  # (B, T, V)
-        return F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)),
-            targets.reshape(-1),
-        )
+        flat = logits.reshape(-1, logits.size(-1))
+        tgt = targets.reshape(-1)
+        n = flat.size(0)
+        chunk = 1024
+        if not torch.is_grad_enabled() or n <= chunk:
+            return F.cross_entropy(flat, tgt)
+
+        def _ce_sum(l: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            return F.cross_entropy(l, t, reduction="sum")
+
+        parts = [checkpoint(_ce_sum, flat[s:s + chunk], tgt[s:s + chunk], use_reentrant=False)
+                 for s in range(0, n, chunk)]
+        return torch.stack(parts).sum() / n
 
     @torch.no_grad()
     def generate(
@@ -132,3 +149,41 @@ class LanguageModel(ABC, nn.Module):
         if exclude_pos_embd and hasattr(self, "pos_embd"):
             n -= self.pos_embd.weight.numel()
         return n
+
+
+# ---------------------------------------------------------------------------
+# Self-check : la CE par chunks == CE directe (valeur ET gradients)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+
+    class _Tiny(LanguageModel):
+        def __init__(self):
+            super().__init__()
+            self.config = BaseModelConfig(vocab_size=257, context_len=512)
+            self.embd = nn.Embedding(257, 16)
+            self.head = nn.Linear(16, 257)
+
+        def forward(self, idx):
+            return self.head(self.embd(idx))
+
+        @classmethod
+        def from_pretrained(cls, model_name):
+            raise NotImplementedError
+
+    m = _Tiny()
+    x = torch.randint(0, 257, (8, 300))   # B·T = 2400 > chunk → chemin chunké exercé
+    y = torch.randint(0, 257, (8, 300))
+
+    loss_c = m.loss(x, y)
+    loss_ref = F.cross_entropy(m(x).reshape(-1, 257), y.reshape(-1))
+    assert torch.allclose(loss_c, loss_ref, atol=1e-6), (loss_c.item(), loss_ref.item())
+
+    loss_c.backward()
+    g_c = m.head.weight.grad.clone()
+    m.zero_grad()
+    loss_ref.backward()
+    g_r = m.head.weight.grad
+    assert torch.allclose(g_c, g_r, atol=1e-6), "gradients chunkés ≠ gradients directs"
+    print(f"loss chunkée OK — valeur ({loss_c.item():.4f}) et gradients identiques à la CE directe")
